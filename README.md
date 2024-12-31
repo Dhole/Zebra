@@ -4,6 +4,8 @@ A PSX emulator written in Zig.
 
 Status: Work in Progress.
 
+License: GPLv3
+
 # Resources
 
 - [Nocash PSXSPX Playstation Specifications](https://problemkaputt.de/psx-spx.htm)
