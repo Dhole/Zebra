@@ -31,10 +31,11 @@ pub fn build(b: *std.Build) void {
 
     const exe_disasm = b.addExecutable(.{
         .name = "disasm",
-        .root_source_file = b.path("src/bin/disasm.zig"),
+        .root_source_file = b.path("src/bin_disasm.zig"),
         .target = target,
         .optimize = optimize,
     });
+    exe_disasm.root_module.addImport("args", b.dependency("args", .{ .target = target, .optimize = optimize }).module("args"));
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

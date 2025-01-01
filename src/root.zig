@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Op = enum {
+pub const Op = enum {
     // Load and Store
     LB,
     LBU,
@@ -104,57 +104,57 @@ const Op = enum {
     RFE,
 };
 
-const InstArgs = union {
+pub const InstArgs = union {
     i_type: ITypeArgs,
     j_type: JTypeArgs,
     r_type: RTypeArgs,
 };
 
-const ITypeArgs = struct {
+pub const ITypeArgs = struct {
     rs: u8,
     rt: u8,
     imm: i16,
 };
 
-const JTypeArgs = struct {
+pub const JTypeArgs = struct {
     target: i32,
 };
 
-const RTypeArgs = struct {
+pub const RTypeArgs = struct {
     rs: u8,
     rt: u8,
     rd: u8,
     imm5: u8,
 };
 
-const Inst = struct {
+pub const Inst = struct {
     op: Op,
     args: InstArgs,
 
     const Self = @This();
 
-    fn op(self: *Self) Op {
+    pub fn op(self: *Self) Op {
         return self.op;
     }
-    fn i_type(_op: Op, rs: u8, rt: u8, imm: i16) Self {
+    pub fn i_type(_op: Op, rs: u8, rt: u8, imm: i16) Self {
         const args = ITypeArgs{ .rs = rs, .rt = rt, .imm = imm };
-        return Self{ .op = _op, .args = InstArgs{ .i_type = args } };
+        return Self{ .op = _op, .args = .{ .i_type = args } };
     }
-    fn j_type(_op: Op, target: i32) Self {
+    pub fn j_type(_op: Op, target: i32) Self {
         const args = JTypeArgs{ .target = target };
-        return Self{ .op = _op, .args = InstArgs{ .j_type = args } };
+        return Self{ .op = _op, .args = .{ .j_type = args } };
     }
-    fn r_type(_op: Op, rs: u8, rt: u8, rd: u8, imm5: u8) Self {
+    pub fn r_type(_op: Op, rs: u8, rt: u8, rd: u8, imm5: u8) Self {
         const args = RTypeArgs{ .rs = rs, .rt = rt, .rd = rd, .imm5 = imm5 };
-        return Self{ .op = _op, .args = InstArgs{ .r_type = args } };
+        return Self{ .op = _op, .args = .{ .r_type = args } };
     }
-    fn get_i_type(self: *Self) ITypeArgs {
+    pub fn get_i_type(self: *Self) ITypeArgs {
         return self.args.ITypeArgs;
     }
-    fn get_j_type(self: *Self) JTypeArgs {
+    pub fn get_j_type(self: *Self) JTypeArgs {
         return self.args.JTypeArgs;
     }
-    fn get_r_type(self: *Self) RTypeArgs {
+    pub fn get_r_type(self: *Self) RTypeArgs {
         return self.args.RTypeArgs;
     }
 };

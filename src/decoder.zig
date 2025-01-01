@@ -193,7 +193,7 @@ fn i_type(op: Op, v: u32) Inst {
     return Inst.i_type(op, dec_rs(v), dec_rt(v), dec_imm16(v));
 }
 
-fn decode(v: u32) Inst {
+pub fn decode(v: u32) Inst {
     const inst = switch (dec_opcode(v)) {
         OPCODE_SPECIAL => switch (dec_special_opcode(v)) {
             SPECIAL_OPCODE_SLL => r_type(Op.SLL, v),
