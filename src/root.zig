@@ -117,7 +117,7 @@ pub const ITypeArgs = struct {
 };
 
 pub const JTypeArgs = struct {
-    target: i32,
+    offset: u32,
 };
 
 pub const RTypeArgs = struct {
@@ -140,8 +140,8 @@ pub const Inst = struct {
         const args = ITypeArgs{ .rs = rs, .rt = rt, .imm = imm };
         return Self{ .op = _op, .args = .{ .i_type = args } };
     }
-    pub fn j_type(_op: Op, target: i32) Self {
-        const args = JTypeArgs{ .target = target };
+    pub fn j_type(_op: Op, imm26: u32) Self {
+        const args = JTypeArgs{ .offset = imm26 * 4 };
         return Self{ .op = _op, .args = .{ .j_type = args } };
     }
     pub fn r_type(_op: Op, rs: u8, rt: u8, rd: u8, imm5: u8) Self {

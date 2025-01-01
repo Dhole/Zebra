@@ -6,6 +6,14 @@ Status: Work in Progress.
 
 License: GPLv3
 
+# Notes
+
+BIOS:
+```
+$ sha256sum bios/SCPH1001.BIN 
+71af94d1e47a68c11e8fdb9f8368040601514a42a5a399cda48c7d3bff1e99d3  bios/SCPH1001.BIN
+```
+
 # Resources
 
 - [Nocash PSXSPX Playstation Specifications](https://problemkaputt.de/psx-spx.htm)

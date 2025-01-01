@@ -177,8 +177,8 @@ fn dec_imm16(v: u32) i16 {
     return @intCast((v & IMM16_MASK) >> IMM16_SHIFT);
 }
 
-fn dec_imm26(v: u32) i32 {
-    return @intCast((v & IMM26_MASK) >> IMM26_SHIFT);
+fn dec_imm26(v: u32) u32 {
+    return (v & IMM26_MASK) >> IMM26_SHIFT;
 }
 
 fn r_type(op: Op, v: u32) Inst {
