@@ -133,7 +133,7 @@ pub const Inst = struct {
 
     const Self = @This();
 
-    pub fn op(self: *Self) Op {
+    pub fn op(self: *const Self) Op {
         return self.op;
     }
     pub fn i_type(_op: Op, rs: u8, rt: u8, imm: i16) Self {
@@ -148,13 +148,13 @@ pub const Inst = struct {
         const args = RTypeArgs{ .rs = rs, .rt = rt, .rd = rd, .imm5 = imm5 };
         return Self{ .op = _op, .args = .{ .r_type = args } };
     }
-    pub fn get_i_type(self: *Self) ITypeArgs {
-        return self.args.ITypeArgs;
+    pub fn get_i_type(self: *const Self) ITypeArgs {
+        return self.args.i_type;
     }
-    pub fn get_j_type(self: *Self) JTypeArgs {
-        return self.args.JTypeArgs;
+    pub fn get_j_type(self: *const Self) JTypeArgs {
+        return self.args.j_type;
     }
-    pub fn get_r_type(self: *Self) RTypeArgs {
-        return self.args.RTypeArgs;
+    pub fn get_r_type(self: *const Self) RTypeArgs {
+        return self.args.r_type;
     }
 };
