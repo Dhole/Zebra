@@ -82,7 +82,6 @@ pub const Op = enum {
     MFC0,
     CTC0,
     CFC0,
-    COP0,
     BC0F,
     BC0T,
 
@@ -92,7 +91,6 @@ pub const Op = enum {
     MFC2,
     CTC2,
     CFC2,
-    COP2,
     BC2F,
     BC2T,
 
