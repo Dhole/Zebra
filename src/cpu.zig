@@ -10,6 +10,9 @@ const Op = root.Op;
 const decoder = @import("decoder.zig");
 const decode = decoder.decode;
 
+const disasm = @import("disasm.zig");
+const FmtReg = disasm.FmtReg;
+
 const MEM_SIZE: usize = 4 * 512 * 1024; // 2 MiB
 pub const BIOS_SIZE: usize = 512 * 1024; // 512 KiB
 const SCRATCH_SIZE: usize = 1024; // 1 KiB
@@ -58,6 +61,25 @@ pub const Cpu = struct {
         self.allocator.free(self.bios);
     }
 
+    pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        for (0..8) |row| {
+            for (0..5) |column| {
+                if (column == 0) {
+                    switch (row) {
+                        0 => try writer.print("pc: {x:0>8}", .{self.pc}),
+                        1 => try writer.print("lo: {x:0>8}", .{self.lo}),
+                        2 => try writer.print("hi: {x:0>8}", .{self.hi}),
+                        else => try writer.print("            ", .{}),
+                    }
+                } else {
+                    const v: u8 = @intCast((column - 1) * 8 + row);
+                    try writer.print("   {d:0>2} {}: {x:0>8}", .{ v, FmtReg{ .v = v }, self.r[v] });
+                }
+            }
+            try writer.print("\n", .{});
+        }
+    }
+
     pub fn step(self: *Self) void {
         // Fetch next instruction
         const inst_raw = self.read_u32(self.pc);
@@ -66,30 +88,25 @@ pub const Cpu = struct {
     }
 
     fn exec(self: *Self, inst: Inst) void {
-        switch (inst.op) {
-            Op.LUI => {
-                const a = inst.get_i_type();
+        switch (inst) {
+            .lui => |a| {
                 self.r[a.rt] = @as(u32, @intCast(a.imm)) << 16;
                 self.pc += 4;
             },
-            Op.ORI => {
-                const a = inst.get_i_type();
+            .ori => |a| {
                 self.r[a.rt] = self.r[a.rs] | @as(u32, @intCast(a.imm));
                 self.pc += 4;
             },
-            Op.SW => {
-                const a = inst.get_i_type();
+            .sw => |a| {
                 const offset: u32 = @intCast(@as(i32, a.imm));
                 self.write_u32(self.r[a.rs] + offset, self.r[a.rt]);
                 self.pc += 4;
             },
-            Op.SLL => {
-                const a = inst.get_r_type();
+            .sll => |a| {
                 self.r[a.rd] = self.r[a.rt] << @intCast(a.imm5);
                 self.pc += 4;
             },
-            Op.ADDIU => {
-                const a = inst.get_i_type();
+            .addiu => |a| {
                 const imm: u32 = @intCast(@as(i32, a.imm));
                 self.r[a.rt] = self.r[a.rs] + imm;
                 self.pc += 4;

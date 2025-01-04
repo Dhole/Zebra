@@ -1,6 +1,10 @@
 const root = @import("root.zig");
 const Op = root.Op;
 const Inst = root.Inst;
+const ITypeArgs = root.ITypeArgs;
+const RTypeArgs = root.RTypeArgs;
+const JTypeArgs = root.JTypeArgs;
+
 // Masks & Shifts
 
 const OPCODE_MASK: u32 = 0b111111_00000_00000_00000_00000_000000;
@@ -157,139 +161,139 @@ fn dec_cop_bc_opcode(v: u32) u32 {
     return (v & COP_BC_OPCODE_MASK) >> COP_BC_OPCODE_SHIFT;
 }
 
-fn dec_rs(v: u32) u8 {
+fn rs(v: u32) u8 {
     return @intCast((v & RS_MASK) >> RS_SHIFT);
 }
 
-fn dec_rt(v: u32) u8 {
+fn rt(v: u32) u8 {
     return @intCast((v & RT_MASK) >> RT_SHIFT);
 }
 
-fn dec_rd(v: u32) u8 {
+fn rd(v: u32) u8 {
     return @intCast((v & RD_MASK) >> RD_SHIFT);
 }
 
-fn dec_imm5(v: u32) u8 {
+fn imm5(v: u32) u8 {
     return @intCast((v & IMM5_MASK) >> IMM5_SHIFT);
 }
 
-fn dec_imm16(v: u32) i16 {
+fn imm16(v: u32) i16 {
     return @intCast((v & IMM16_MASK) >> IMM16_SHIFT);
 }
 
-fn dec_imm26(v: u32) u32 {
+fn imm26(v: u32) u32 {
     return (v & IMM26_MASK) >> IMM26_SHIFT;
 }
 
-fn r_type(op: Op, v: u32) Inst {
-    return Inst.r_type(op, dec_rs(v), dec_rt(v), dec_rd(v), dec_imm5(v));
+fn r_type(v: u32) RTypeArgs {
+    return .{ .rs = rs(v), .rt = rt(v), .rd = rd(v), .imm5 = imm5(v) };
 }
 
-fn j_type(op: Op, v: u32) Inst {
-    return Inst.j_type(op, dec_imm26(v));
+fn j_type(v: u32) JTypeArgs {
+    return .{ .offset = imm26(v) };
 }
 
-fn i_type(op: Op, v: u32) Inst {
-    return Inst.i_type(op, dec_rs(v), dec_rt(v), dec_imm16(v));
+fn i_type(v: u32) ITypeArgs {
+    return .{ .rs = rs(v), .rt = rt(v), .imm = imm16(v) };
 }
 
 pub fn decode(v: u32) Inst {
     const inst = switch (dec_opcode(v)) {
         OPCODE_SPECIAL => switch (dec_special_opcode(v)) {
-            SPECIAL_OPCODE_SLL => r_type(Op.SLL, v),
-            SPECIAL_OPCODE_SRL => r_type(Op.SRL, v),
-            SPECIAL_OPCODE_SRA => r_type(Op.SRA, v),
-            SPECIAL_OPCODE_SLLV => r_type(Op.SLLV, v),
-            SPECIAL_OPCODE_SRLV => r_type(Op.SRLV, v),
-            SPECIAL_OPCODE_SRAV => r_type(Op.SRAV, v),
-            SPECIAL_OPCODE_JR => r_type(Op.JR, v),
-            SPECIAL_OPCODE_JALR => r_type(Op.JALR, v),
-            SPECIAL_OPCODE_SYS => r_type(Op.SYS, v),
-            SPECIAL_OPCODE_BRK => r_type(Op.BRK, v),
-            SPECIAL_OPCODE_MFHI => r_type(Op.MFHI, v),
-            SPECIAL_OPCODE_MTHI => r_type(Op.MTHI, v),
-            SPECIAL_OPCODE_MFLO => r_type(Op.MFLO, v),
-            SPECIAL_OPCODE_MTLO => r_type(Op.MTLO, v),
-            SPECIAL_OPCODE_MULT => r_type(Op.MULT, v),
-            SPECIAL_OPCODE_MULTU => r_type(Op.MULTU, v),
-            SPECIAL_OPCODE_DIV => r_type(Op.DIV, v),
-            SPECIAL_OPCODE_DIVU => r_type(Op.DIVU, v),
-            SPECIAL_OPCODE_ADD => r_type(Op.ADD, v),
-            SPECIAL_OPCODE_ADDU => r_type(Op.ADDU, v),
-            SPECIAL_OPCODE_SUB => r_type(Op.SUB, v),
-            SPECIAL_OPCODE_SUBU => r_type(Op.SUBU, v),
-            SPECIAL_OPCODE_SLT => r_type(Op.SLT, v),
-            SPECIAL_OPCODE_SLTU => r_type(Op.SLTU, v),
-            SPECIAL_OPCODE_AND => r_type(Op.AND, v),
-            SPECIAL_OPCODE_OR => r_type(Op.OR, v),
-            SPECIAL_OPCODE_XOR => r_type(Op.XOR, v),
-            SPECIAL_OPCODE_NOR => r_type(Op.NOR, v),
+            SPECIAL_OPCODE_SLL => Inst{ .sll = r_type(v) },
+            SPECIAL_OPCODE_SRL => Inst{ .srl = r_type(v) },
+            SPECIAL_OPCODE_SRA => Inst{ .sra = r_type(v) },
+            SPECIAL_OPCODE_SLLV => Inst{ .sllv = r_type(v) },
+            SPECIAL_OPCODE_SRLV => Inst{ .srlv = r_type(v) },
+            SPECIAL_OPCODE_SRAV => Inst{ .srav = r_type(v) },
+            SPECIAL_OPCODE_JR => Inst{ .jr = r_type(v) },
+            SPECIAL_OPCODE_JALR => Inst{ .jalr = r_type(v) },
+            SPECIAL_OPCODE_SYS => Inst{ .sys = r_type(v) },
+            SPECIAL_OPCODE_BRK => Inst{ .brk = r_type(v) },
+            SPECIAL_OPCODE_MFHI => Inst{ .mfhi = r_type(v) },
+            SPECIAL_OPCODE_MTHI => Inst{ .mthi = r_type(v) },
+            SPECIAL_OPCODE_MFLO => Inst{ .mflo = r_type(v) },
+            SPECIAL_OPCODE_MTLO => Inst{ .mtlo = r_type(v) },
+            SPECIAL_OPCODE_MULT => Inst{ .mult = r_type(v) },
+            SPECIAL_OPCODE_MULTU => Inst{ .multu = r_type(v) },
+            SPECIAL_OPCODE_DIV => Inst{ .div = r_type(v) },
+            SPECIAL_OPCODE_DIVU => Inst{ .divu = r_type(v) },
+            SPECIAL_OPCODE_ADD => Inst{ .add = r_type(v) },
+            SPECIAL_OPCODE_ADDU => Inst{ .addu = r_type(v) },
+            SPECIAL_OPCODE_SUB => Inst{ .sub = r_type(v) },
+            SPECIAL_OPCODE_SUBU => Inst{ .subu = r_type(v) },
+            SPECIAL_OPCODE_SLT => Inst{ .slt = r_type(v) },
+            SPECIAL_OPCODE_SLTU => Inst{ .sltu = r_type(v) },
+            SPECIAL_OPCODE_AND => Inst{ .@"and" = r_type(v) },
+            SPECIAL_OPCODE_OR => Inst{ .@"or" = r_type(v) },
+            SPECIAL_OPCODE_XOR => Inst{ .xor = r_type(v) },
+            SPECIAL_OPCODE_NOR => Inst{ .nor = r_type(v) },
             else => @panic("TODO: unknown opcode"),
         },
         OPCODE_BcondZ => switch (dec_bcondz_opcode(v)) {
-            BCONDZ_OPCODE_BLTZ => i_type(Op.BLTZ, v),
-            BCONDZ_OPCODE_BGEZ => i_type(Op.BGEZ, v),
-            BCONDZ_OPCODE_BLTZAL => i_type(Op.BLTZAL, v),
-            BCONDZ_OPCODE_BGEZAL => i_type(Op.BGEZAL, v),
+            BCONDZ_OPCODE_BLTZ => Inst{ .bltz = i_type(v) },
+            BCONDZ_OPCODE_BGEZ => Inst{ .bgez = i_type(v) },
+            BCONDZ_OPCODE_BLTZAL => Inst{ .bltzal = i_type(v) },
+            BCONDZ_OPCODE_BGEZAL => Inst{ .bgezal = i_type(v) },
             else => @panic("TODO: unknown opcode"),
         },
-        OPCODE_J => j_type(Op.J, v),
-        OPCODE_JAL => j_type(Op.JAL, v),
-        OPCODE_BEQ => i_type(Op.BEQ, v),
-        OPCODE_BNE => i_type(Op.BNE, v),
-        OPCODE_BLEZ => i_type(Op.BLEZ, v),
-        OPCODE_BGTZ => i_type(Op.BGTZ, v),
-        OPCODE_ADDI => i_type(Op.ADDI, v),
-        OPCODE_ADDIU => i_type(Op.ADDIU, v),
-        OPCODE_SLTI => i_type(Op.SLTI, v),
-        OPCODE_SLTIU => i_type(Op.SLTIU, v),
-        OPCODE_ANDI => i_type(Op.ANDI, v),
-        OPCODE_ORI => i_type(Op.ORI, v),
-        OPCODE_XORI => i_type(Op.XORI, v),
-        OPCODE_LUI => i_type(Op.LUI, v),
-        OPCODE_LB => i_type(Op.LB, v),
-        OPCODE_LH => i_type(Op.LH, v),
-        OPCODE_LWL => i_type(Op.LWL, v),
-        OPCODE_LW => i_type(Op.LW, v),
-        OPCODE_LBU => i_type(Op.LBU, v),
-        OPCODE_LHU => i_type(Op.LHU, v),
-        OPCODE_LWR => i_type(Op.LWR, v),
-        OPCODE_SB => i_type(Op.SB, v),
-        OPCODE_SH => i_type(Op.SH, v),
-        OPCODE_SWL => i_type(Op.SWL, v),
-        OPCODE_SW => i_type(Op.SW, v),
-        OPCODE_SWR => i_type(Op.SWR, v),
+        OPCODE_J => Inst{ .j = j_type(v) },
+        OPCODE_JAL => Inst{ .jal = j_type(v) },
+        OPCODE_BEQ => Inst{ .beq = i_type(v) },
+        OPCODE_BNE => Inst{ .bne = i_type(v) },
+        OPCODE_BLEZ => Inst{ .blez = i_type(v) },
+        OPCODE_BGTZ => Inst{ .bgtz = i_type(v) },
+        OPCODE_ADDI => Inst{ .addi = i_type(v) },
+        OPCODE_ADDIU => Inst{ .addiu = i_type(v) },
+        OPCODE_SLTI => Inst{ .slti = i_type(v) },
+        OPCODE_SLTIU => Inst{ .sltiu = i_type(v) },
+        OPCODE_ANDI => Inst{ .andi = i_type(v) },
+        OPCODE_ORI => Inst{ .ori = i_type(v) },
+        OPCODE_XORI => Inst{ .xori = i_type(v) },
+        OPCODE_LUI => Inst{ .lui = i_type(v) },
+        OPCODE_LB => Inst{ .lb = i_type(v) },
+        OPCODE_LH => Inst{ .lh = i_type(v) },
+        OPCODE_LWL => Inst{ .lwl = i_type(v) },
+        OPCODE_LW => Inst{ .lw = i_type(v) },
+        OPCODE_LBU => Inst{ .lbu = i_type(v) },
+        OPCODE_LHU => Inst{ .lhu = i_type(v) },
+        OPCODE_LWR => Inst{ .lwr = i_type(v) },
+        OPCODE_SB => Inst{ .sb = i_type(v) },
+        OPCODE_SH => Inst{ .sh = i_type(v) },
+        OPCODE_SWL => Inst{ .swl = i_type(v) },
+        OPCODE_SW => Inst{ .sw = i_type(v) },
+        OPCODE_SWR => Inst{ .swr = i_type(v) },
         OPCODE_COP0 => switch (dec_cop_opcode(v)) {
-            COP_OPCODE_MFC => r_type(Op.MFC0, v),
-            COP_OPCODE_CFC => r_type(Op.CFC0, v),
-            COP_OPCODE_MTC => r_type(Op.MTC0, v),
-            COP_OPCODE_CTC => r_type(Op.CTC0, v),
-            COP0_OPCODE_TLBR => r_type(Op.TLBR, v),
-            COP0_OPCODE_TLBWI => r_type(Op.TLBWI, v),
-            COP0_OPCODE_TLBWR => r_type(Op.TLBWR, v),
-            COP0_OPCODE_TLBP => r_type(Op.TLBP, v),
-            COP0_OPCODE_RFE => r_type(Op.RFE, v),
+            COP_OPCODE_MFC => Inst{ .mfc0 = r_type(v) },
+            COP_OPCODE_CFC => Inst{ .cfc0 = r_type(v) },
+            COP_OPCODE_MTC => Inst{ .mtc0 = r_type(v) },
+            COP_OPCODE_CTC => Inst{ .ctc0 = r_type(v) },
+            COP0_OPCODE_TLBR => Inst{ .tlbr = r_type(v) },
+            COP0_OPCODE_TLBWI => Inst{ .tlbwi = r_type(v) },
+            COP0_OPCODE_TLBWR => Inst{ .tlbwr = r_type(v) },
+            COP0_OPCODE_TLBP => Inst{ .tlbp = r_type(v) },
+            COP0_OPCODE_RFE => Inst{ .rfe = r_type(v) },
             else => switch (dec_cop_bc_opcode(v)) {
-                COP_BC_OPCODE_BCF => i_type(Op.BC0F, v),
-                COP_BC_OPCODE_BCT => i_type(Op.BC0T, v),
+                COP_BC_OPCODE_BCF => Inst{ .bc0f = i_type(v) },
+                COP_BC_OPCODE_BCT => Inst{ .bc0t = i_type(v) },
                 else => @panic("TODO: unknown opcode"),
             },
         },
         OPCODE_COP2 => switch (dec_cop_opcode(v)) {
-            COP_OPCODE_MFC => r_type(Op.MFC2, v),
-            COP_OPCODE_CFC => r_type(Op.CFC2, v),
-            COP_OPCODE_MTC => r_type(Op.MTC2, v),
-            COP_OPCODE_CTC => r_type(Op.CTC2, v),
+            COP_OPCODE_MFC => Inst{ .mfc0 = r_type(v) },
+            COP_OPCODE_CFC => Inst{ .cfc0 = r_type(v) },
+            COP_OPCODE_MTC => Inst{ .mtc0 = r_type(v) },
+            COP_OPCODE_CTC => Inst{ .ctc0 = r_type(v) },
             else => switch (dec_cop_bc_opcode(v)) {
-                COP_BC_OPCODE_BCF => i_type(Op.BC2F, v),
-                COP_BC_OPCODE_BCT => i_type(Op.BC2T, v),
+                COP_BC_OPCODE_BCF => Inst{ .bc0f = i_type(v) },
+                COP_BC_OPCODE_BCT => Inst{ .bc0t = i_type(v) },
                 else => @panic("TODO: unknown opcode"),
             },
         },
-        OPCODE_LWC0 => i_type(Op.LWC0, v),
-        OPCODE_LWC2 => i_type(Op.LWC2, v),
-        OPCODE_SWC0 => i_type(Op.SWC0, v),
-        OPCODE_SWC2 => i_type(Op.SWC2, v),
+        OPCODE_LWC0 => Inst{ .lwc0 = i_type(v) },
+        OPCODE_LWC2 => Inst{ .lwc2 = i_type(v) },
+        OPCODE_SWC0 => Inst{ .swc0 = i_type(v) },
+        OPCODE_SWC2 => Inst{ .swc2 = i_type(v) },
         else => @panic("TODO: unknown opcode"),
     };
     return inst;

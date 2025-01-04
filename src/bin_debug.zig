@@ -53,12 +53,15 @@ pub fn main() !void {
 
     const w = std.io.getStdOut().writer();
     var i: u32 = 0;
+    try w.print("{}", .{&cpu});
     while (true) {
         const v = cpu.read_u32(cpu.pc);
         const inst = decode(v);
+        try w.print("--------\n", .{});
         try w.print("{x:0>8}: {x:0>8} {}", .{ cpu.pc, v, FmtInst{ .v = inst, .pc = cpu.pc } });
         try w.print("\n", .{});
         cpu.step();
+        try w.print("{}", .{&cpu});
 
         if (@as(u64, i) == opts.num - 1) {
             break;

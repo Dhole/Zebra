@@ -1,113 +1,5 @@
 const std = @import("std");
 
-pub const Op = enum {
-    // Load and Store
-    LB,
-    LBU,
-    LH,
-    LHU,
-    LW,
-    LWL,
-    LWR,
-    SB,
-    SH,
-    SW,
-    SWL,
-    SWR,
-
-    // ALU Immediate
-    ADDI,
-    ADDIU,
-    SLTI,
-    SLTIU,
-    ANDI,
-    ORI,
-    XORI,
-    LUI,
-
-    // ALU Register
-    ADD,
-    ADDU,
-    SUB,
-    SUBU,
-    SLT,
-    SLTU,
-    AND,
-    OR,
-    XOR,
-    NOR,
-
-    // Shift
-    SLL,
-    SRL,
-    SRA,
-    SLLV,
-    SRLV,
-    SRAV,
-
-    // Multiply and Divide
-    MULT,
-    MULTU,
-    DIV,
-    DIVU,
-    MFHI,
-    MFLO,
-    MTHI,
-    MTLO,
-
-    // Jump
-    J,
-    JAL,
-    JR,
-    JALR,
-
-    // Branch
-    BEQ,
-    BNE,
-    BLEZ,
-    BGTZ,
-    BLTZ,
-    BGEZ,
-    BLTZAL,
-    BGEZAL,
-
-    // Special
-    SYS,
-    BRK,
-
-    // Co-processor
-    LWC0,
-    SWC0,
-    MTC0,
-    MFC0,
-    CTC0,
-    CFC0,
-    BC0F,
-    BC0T,
-
-    LWC2,
-    SWC2,
-    MTC2,
-    MFC2,
-    CTC2,
-    CFC2,
-    BC2F,
-    BC2T,
-
-    // System control
-    TLBR,
-    TLBWI,
-    TLBWR,
-    TLBP,
-    RFE,
-};
-
-pub const InstArgs = union {
-    i_type: ITypeArgs,
-    j_type: JTypeArgs,
-    r_type: RTypeArgs,
-};
-
 pub const ITypeArgs = struct {
     rs: u8,
     rt: u8,
@@ -125,34 +17,104 @@ pub const RTypeArgs = struct {
     imm5: u8,
 };
 
-pub const Inst = struct {
-    op: Op,
-    args: InstArgs,
+pub const Inst = union(enum) {
+    // Load and Store
+    lb: ITypeArgs,
+    lbu: ITypeArgs,
+    lh: ITypeArgs,
+    lhu: ITypeArgs,
+    lw: ITypeArgs,
+    lwl: ITypeArgs,
+    lwr: ITypeArgs,
+    sb: ITypeArgs,
+    sh: ITypeArgs,
+    sw: ITypeArgs,
+    swl: ITypeArgs,
+    swr: ITypeArgs,
 
-    const Self = @This();
+    // ALU Immediate
+    addi: ITypeArgs,
+    addiu: ITypeArgs,
+    slti: ITypeArgs,
+    sltiu: ITypeArgs,
+    andi: ITypeArgs,
+    ori: ITypeArgs,
+    xori: ITypeArgs,
+    lui: ITypeArgs,
 
-    pub fn op(self: *const Self) Op {
-        return self.op;
-    }
-    pub fn i_type(_op: Op, rs: u8, rt: u8, imm: i16) Self {
-        const args = ITypeArgs{ .rs = rs, .rt = rt, .imm = imm };
-        return Self{ .op = _op, .args = .{ .i_type = args } };
-    }
-    pub fn j_type(_op: Op, imm26: u32) Self {
-        const args = JTypeArgs{ .offset = imm26 * 4 };
-        return Self{ .op = _op, .args = .{ .j_type = args } };
-    }
-    pub fn r_type(_op: Op, rs: u8, rt: u8, rd: u8, imm5: u8) Self {
-        const args = RTypeArgs{ .rs = rs, .rt = rt, .rd = rd, .imm5 = imm5 };
-        return Self{ .op = _op, .args = .{ .r_type = args } };
-    }
-    pub fn get_i_type(self: *const Self) ITypeArgs {
-        return self.args.i_type;
-    }
-    pub fn get_j_type(self: *const Self) JTypeArgs {
-        return self.args.j_type;
-    }
-    pub fn get_r_type(self: *const Self) RTypeArgs {
-        return self.args.r_type;
-    }
+    // ALU Register
+    add: RTypeArgs,
+    addu: RTypeArgs,
+    sub: RTypeArgs,
+    subu: RTypeArgs,
+    slt: RTypeArgs,
+    sltu: RTypeArgs,
+    @"and": RTypeArgs,
+    @"or": RTypeArgs,
+    xor: RTypeArgs,
+    nor: RTypeArgs,
+
+    // Shift
+    sll: RTypeArgs,
+    srl: RTypeArgs,
+    sra: RTypeArgs,
+    sllv: RTypeArgs,
+    srlv: RTypeArgs,
+    srav: RTypeArgs,
+
+    // Multiply and Divide
+    mult: RTypeArgs,
+    multu: RTypeArgs,
+    div: RTypeArgs,
+    divu: RTypeArgs,
+    mfhi: RTypeArgs,
+    mflo: RTypeArgs,
+    mthi: RTypeArgs,
+    mtlo: RTypeArgs,
+
+    // Jump
+    j: JTypeArgs,
+    jal: JTypeArgs,
+    jr: RTypeArgs,
+    jalr: RTypeArgs,
+
+    // Branch
+    beq: ITypeArgs,
+    bne: ITypeArgs,
+    blez: ITypeArgs,
+    bgtz: ITypeArgs,
+    bltz: ITypeArgs,
+    bgez: ITypeArgs,
+    bltzal: ITypeArgs,
+    bgezal: ITypeArgs,
+
+    // Special
+    sys: RTypeArgs,
+    brk: RTypeArgs,
+
+    // Co-processor
+    lwc0: ITypeArgs,
+    swc0: ITypeArgs,
+    mtc0: RTypeArgs,
+    mfc0: RTypeArgs,
+    ctc0: RTypeArgs,
+    cfc0: RTypeArgs,
+    bc0f: ITypeArgs,
+    bc0t: ITypeArgs,
+
+    lwc2: ITypeArgs,
+    swc2: ITypeArgs,
+    mtc2: RTypeArgs,
+    mfc2: RTypeArgs,
+    ctc2: RTypeArgs,
+    cfc2: RTypeArgs,
+    bc2f: ITypeArgs,
+    bc2t: ITypeArgs,
+
+    // System control
+    tlbr: RTypeArgs,
+    tlbwi: RTypeArgs,
+    tlbwr: RTypeArgs,
+    tlbp: RTypeArgs,
+    rfe: RTypeArgs,
 };
