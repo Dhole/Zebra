@@ -178,7 +178,8 @@ fn imm5(v: u32) u8 {
 }
 
 fn imm16(v: u32) i16 {
-    return @intCast((v & IMM16_MASK) >> IMM16_SHIFT);
+    const imm: u16 = @intCast((v & IMM16_MASK) >> IMM16_SHIFT);
+    return @bitCast(imm);
 }
 
 fn imm26(v: u32) u32 {
@@ -186,11 +187,11 @@ fn imm26(v: u32) u32 {
 }
 
 fn r_type(v: u32) RTypeArgs {
-    return .{ .rs = rs(v), .rt = rt(v), .rd = rd(v), .imm5 = imm5(v) };
+    return .{ .rs = rs(v), .rt = rt(v), .rd = rd(v), .imm = imm5(v) };
 }
 
 fn j_type(v: u32) JTypeArgs {
-    return .{ .offset = imm26(v) };
+    return .{ .imm = imm26(v) };
 }
 
 fn i_type(v: u32) ITypeArgs {

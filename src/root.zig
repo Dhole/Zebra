@@ -7,14 +7,14 @@ pub const ITypeArgs = struct {
 };
 
 pub const JTypeArgs = struct {
-    offset: u32,
+    imm: u32,
 };
 
 pub const RTypeArgs = struct {
     rs: u8,
     rt: u8,
     rd: u8,
-    imm5: u8,
+    imm: u8,
 };
 
 pub const Inst = union(enum) {

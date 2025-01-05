@@ -12,18 +12,28 @@ const decode = decoder.decode;
 
 const disasm = @import("disasm.zig");
 const FmtReg = disasm.FmtReg;
+const FmtInst = disasm.FmtInst;
 
 const MEM_SIZE: usize = 4 * 512 * 1024; // 2 MiB
 pub const BIOS_SIZE: usize = 512 * 1024; // 512 KiB
 const SCRATCH_SIZE: usize = 1024; // 1 KiB
 const HWREGS_SIZE: usize = 8 * 1024; // 8 KiB
+const CACHECTL_SIZE: usize = 512; // 0.5 KiB
 const ADDR_BIOS: u32 = 0xbfc0_0000;
 const ADDR_KUSEG: u32 = 0x0000_0000;
 const ADDR_KSEG0: u32 = 0x8000_0000;
 const ADDR_KSEG1: u32 = 0xa000_0000;
+const ADDR_KSEG2: u32 = 0xfffe_0000;
 const ADDR_RESET: u32 = ADDR_BIOS;
 const ADDR_SCRATCH: u32 = 0x1f80_0000;
 const ADDR_HWREGS: u32 = 0x1f80_1000;
+
+fn Cfg(comptime writer_type: type) type {
+    return struct {
+        dbg_inst: bool = false,
+        dbg_writer: writer_type = null,
+    };
+}
 
 pub const Cpu = struct {
     r: [32]u32, // Registers
@@ -36,21 +46,24 @@ pub const Cpu = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: mem.Allocator, bios: []const u8) !Self {
+    pub fn init(
+        allocator: mem.Allocator,
+        bios: []const u8,
+    ) !Self {
         if (bios.len != BIOS_SIZE) {
             return error.BiosInvalidSize;
         }
-        const _mem = try allocator.alloc(u8, MEM_SIZE);
-        @memset(_mem, 0);
-        const _bios = try allocator.alloc(u8, BIOS_SIZE);
-        std.mem.copyForwards(u8, _bios, bios);
+        const memory = try allocator.alloc(u8, MEM_SIZE);
+        @memset(memory, 0);
+        const bios_copy = try allocator.alloc(u8, BIOS_SIZE);
+        std.mem.copyForwards(u8, bios_copy, bios);
         const self = Self{
             .r = [_]u32{0} ** 32,
             .pc = ADDR_RESET,
             .lo = 0,
             .hi = 0,
-            .bios = _bios,
-            .mem = _mem,
+            .bios = bios_copy,
+            .mem = memory,
             .allocator = allocator,
         };
         return self;
@@ -90,26 +103,53 @@ pub const Cpu = struct {
     fn exec(self: *Self, inst: Inst) void {
         switch (inst) {
             .lui => |a| {
-                self.r[a.rt] = @as(u32, @intCast(a.imm)) << 16;
+                const imm: u16 = @bitCast(a.imm);
+                self.r[a.rt] = @as(u32, imm) << 16;
                 self.pc += 4;
             },
             .ori => |a| {
-                self.r[a.rt] = self.r[a.rs] | @as(u32, @intCast(a.imm));
+                const imm: u16 = @bitCast(a.imm);
+                self.r[a.rt] = self.r[a.rs] | @as(u32, imm);
                 self.pc += 4;
             },
             .sw => |a| {
-                const offset: u32 = @intCast(@as(i32, a.imm));
+                const offset: u32 = @bitCast(@as(i32, a.imm));
                 self.write_u32(self.r[a.rs] + offset, self.r[a.rt]);
                 self.pc += 4;
             },
             .sll => |a| {
-                self.r[a.rd] = self.r[a.rt] << @intCast(a.imm5);
+                self.r[a.rd] = self.r[a.rt] << @intCast(a.imm);
                 self.pc += 4;
             },
             .addiu => |a| {
-                const imm: u32 = @intCast(@as(i32, a.imm));
+                const imm: u32 = @bitCast(@as(i32, a.imm));
                 self.r[a.rt] = self.r[a.rs] + imm;
                 self.pc += 4;
+            },
+            .j => |a| {
+                self.pc = (self.pc & 0xf0000000) + a.imm * 4;
+            },
+            .@"or" => |a| {
+                self.r[a.rd] = self.r[a.rs] | self.r[a.rt];
+                self.pc += 4;
+            },
+            .cfc0 => |a| {
+                // TODO
+                // self.r[a.rt] = self.cop0.ctl_reg[a.rd]
+                _ = a;
+                self.pc += 4;
+            },
+            .bne => |a| {
+                self.pc += 4;
+                if (self.r[a.rs] != self.r[a.rt]) {
+                    const pc = self.pc;
+                    // Execute instruction in the branch delay slot
+                    const next_inst_raw = self.read_u32(self.pc);
+                    const next_inst = decode(next_inst_raw);
+                    self.exec(next_inst);
+                    const offset: u32 = @bitCast(@as(i32, a.imm * 4));
+                    self.pc = pc + offset;
+                }
             },
             else => @panic("TODO"),
         }
@@ -166,6 +206,9 @@ pub const Cpu = struct {
         } else if (ADDR_HWREGS <= addr and addr < ADDR_HWREGS + HWREGS_SIZE) {
             // TODO
             // @panic("TODO: HWREGS");
+        } else if (ADDR_KSEG2 <= addr and addr < ADDR_KSEG2 + CACHECTL_SIZE) {
+            // TODO
+            // @panic("TODO: CACHECTL");
         } else {
             @panic("TODO");
         }

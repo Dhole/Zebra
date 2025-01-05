@@ -48,7 +48,7 @@ pub fn main() !void {
     const bios_file = try std.fs.cwd().openFile(opts_bios, .{});
     const bios = try bios_file.reader().readAllAlloc(allocator, BIOS_SIZE);
     defer allocator.free(bios);
-    var cpu = try Cpu.init(allocator, bios);
+    var cpu = try Cpu.init(allocator, bios, .{});
     defer cpu.deinit();
 
     const w = std.io.getStdOut().writer();
@@ -58,8 +58,7 @@ pub fn main() !void {
         const v = cpu.read_u32(cpu.pc);
         const inst = decode(v);
         try w.print("--------\n", .{});
-        try w.print("{x:0>8}: {x:0>8} {}", .{ cpu.pc, v, FmtInst{ .v = inst, .pc = cpu.pc } });
-        try w.print("\n", .{});
+        try w.print("{x:0>8}: {x:0>8} {}\n", .{ cpu.pc, v, FmtInst{ .v = inst, .pc = cpu.pc } });
         cpu.step();
         try w.print("{}", .{&cpu});
 
