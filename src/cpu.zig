@@ -29,13 +29,18 @@ const ADDR_SCRATCH: u32 = 0x1f80_0000;
 const ADDR_HWREGS: u32 = 0x1f80_1000;
 
 pub const Cfg = struct {
-    dbg_inst: bool,
+    dbg: bool = false,
+};
+
+pub const Dbg = struct {
+    trace_inst: bool = false,
 };
 
 pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
     return struct {
         dbg_w: dbg_writer_type,
         comptime cfg: Cfg = cfg,
+        dbg: Dbg,
         r: [32]u32, // Registers
         pc: u32, // Program Counter
         hi: u32, // Multiplication 64 bit high result or division remainder
@@ -61,6 +66,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             const self = Self{
                 .dbg_w = dbg_writer,
                 .cfg = cfg,
+                .dbg = Dbg{},
                 .r = [_]u32{0} ** 32,
                 .pc = ADDR_RESET,
                 .lo = 0,
@@ -77,7 +83,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             self.allocator.free(self.bios);
         }
 
-        pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        pub fn format_regs(self: *const Self, writer: anytype) !void {
             for (0..8) |row| {
                 for (0..5) |column| {
                     if (column == 0) {
@@ -100,7 +106,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             // Fetch next instruction
             const inst_raw = self.read_u32(self.pc);
             const inst = decode(inst_raw);
-            if (self.cfg.dbg_inst) {
+            if (self.cfg.dbg and self.dbg.trace_inst) {
                 self.dbg_w.print("{x:0>8}: {x:0>8} {}\n", .{ self.pc, inst_raw, FmtInst{ .v = inst, .pc = self.pc } }) catch @panic("write");
             }
             self.exec(inst);
@@ -120,7 +126,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 },
                 .sw => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
-                    self.write_u32(self.r[a.rs] + offset, self.r[a.rt]);
+                    self.write_u32(self.r[a.rs] +% offset, self.r[a.rt]);
                     self.pc += 4;
                 },
                 .sll => |a| {
@@ -129,7 +135,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 },
                 .addiu => |a| {
                     const imm: u32 = @bitCast(@as(i32, a.imm));
-                    self.r[a.rt] = self.r[a.rs] + imm;
+                    self.r[a.rt] = self.r[a.rs] +% imm;
                     self.pc += 4;
                 },
                 .j => |a| {
@@ -152,8 +158,14 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                         // Execute instruction in the branch delay slot
                         self.step();
                         const offset: u32 = @bitCast(@as(i32, a.imm * 4));
-                        self.pc = pc + offset;
+                        self.pc = pc +% offset;
                     }
+                },
+                .addi => |a| {
+                    // TODO: overflow trap
+                    const imm: u32 = @bitCast(@as(i32, a.imm));
+                    self.r[a.rt] = self.r[a.rs] +% imm;
+                    self.pc += 4;
                 },
                 else => @panic("TODO"),
             }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const eql = std.mem.eql;
 const argsParser = @import("args");
 
 const decoder = @import("decoder.zig");
@@ -51,23 +52,97 @@ pub fn main() !void {
     defer allocator.free(bios);
 
     const w = std.io.getStdOut().writer();
-    const cfg = Cfg{ .dbg_inst = true };
+    const r = std.io.getStdIn().reader();
+    var buf: [128]u8 = undefined;
+
+    const cfg = Cfg{ .dbg = true };
     var cpu = try Cpu(@TypeOf(w), cfg).init(allocator, bios, w);
     defer cpu.deinit();
 
-    var i: u32 = 0;
-    try w.print("{}", .{&cpu});
+    var last_cmd: Cmd = .nop;
     while (true) {
-        // const v = cpu.read_u32(cpu.pc);
-        // const inst = decode(v);
-        try w.print("--------\n", .{});
-        // try w.print("{x:0>8}: {x:0>8} {}\n", .{ cpu.pc, v, FmtInst{ .v = inst, .pc = cpu.pc } });
-        cpu.step();
-        try w.print("{}", .{&cpu});
+        try w.print("> ", .{});
+        const buf_input = try r.readUntilDelimiterOrEof(&buf, '\n');
+        const input = buf_input orelse break;
+        const cmd = parse_input(input) catch |err| {
+            switch (err) {
+                error.InvalidArgument => try w.print("ERR: Invalid argument\n", .{}),
+                error.MissingArgument => try w.print("ERR: Missing argument\n", .{}),
+            }
+            continue;
+        } orelse last_cmd;
 
-        if (@as(u64, i) == opts.num - 1) {
-            break;
+        switch (cmd) {
+            .trace_inst => |a| {
+                cpu.dbg.trace_inst = a.v;
+            },
+            .step => |a| {
+                for (0..a.n) |_| {
+                    cpu.step();
+                }
+            },
+            .regs => try cpu.format_regs(w),
+            .help => try print_help(w),
+            .unknown => {
+                try w.print("ERR: Unknown command\n", .{});
+            },
+            .nop => {},
         }
-        i += 1;
+        last_cmd = cmd;
     }
+}
+
+const Cmd = union(enum) {
+    step: struct { n: usize },
+    trace_inst: struct { v: bool },
+    regs,
+    help,
+    unknown,
+    nop,
+};
+
+fn parse_bool(arg: []const u8) !bool {
+    if (eql(u8, arg, "t")) {
+        return true;
+    } else if (eql(u8, arg, "f")) {
+        return false;
+    } else {
+        return error.InvalidArgument;
+    }
+}
+
+fn parse_input(input: []const u8) !?Cmd {
+    var it = std.mem.tokenizeSequence(u8, input, " ");
+    const cmd = it.next() orelse {
+        return null;
+    };
+    if (eql(u8, cmd, "h")) {
+        return .help;
+    } else if (eql(u8, cmd, "r")) {
+        return .regs;
+    } else if (eql(u8, cmd, "trace_inst")) {
+        const value = try parse_bool(it.next() orelse return error.MissingArgument);
+        return .{ .trace_inst = .{ .v = value } };
+    } else if (eql(u8, cmd, "s")) {
+        const n = if (it.next()) |n_str|
+            std.fmt.parseInt(usize, n_str, 0) catch {
+                return error.InvalidArgument;
+            }
+        else
+            1;
+        return .{ .step = .{ .n = n } };
+    } else {
+        return .unknown;
+    }
+}
+
+fn print_help(w: anytype) !void {
+    try w.print(
+        \\Commands:
+        \\ h : Print help
+        \\ s [n] : Step `n` or 1 instruction
+        \\ trace_inst {{t,f}} : Enable/disable tracing all executed instructions
+        \\ r : Print CPU Registers
+        \\
+    , .{});
 }
