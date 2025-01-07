@@ -90,6 +90,11 @@ fn fmt_i_signed_type(w: anytype, op: []const u8, a: ITypeArgs) !void {
         try w.print("{s} {}, {}, -0x{x}", .{ op, FmtReg{ .v = a.rt }, FmtReg{ .v = a.rs }, -a.imm });
     }
 }
+fn fmt_i_branch_type(w: anytype, op: []const u8, pc: u32, a: ITypeArgs) !void {
+    const offset: u32 = @bitCast(@as(i32, a.imm * 4));
+    const dst = pc +% 4 +% offset;
+    try w.print("{s} {}, {}, 0x{x}", .{ op, FmtReg{ .v = a.rs }, FmtReg{ .v = a.rt }, dst });
+}
 fn fmt_i_rt_imm_type(w: anytype, op: []const u8, a: ITypeArgs) !void {
     const imm: u16 = @bitCast(a.imm);
     try w.print("{s} {}, 0x{x}", .{ op, FmtReg{ .v = a.rt }, imm });
@@ -103,6 +108,11 @@ fn fmt_i_rs_imm_signed_type(w: anytype, op: []const u8, a: ITypeArgs) !void {
     } else {
         try w.print("{s} {}, -0x{x}", .{ op, FmtReg{ .v = a.rs }, -a.imm });
     }
+}
+fn fmt_i_rs_imm_branch_type(w: anytype, op: []const u8, pc: u32, a: ITypeArgs) !void {
+    const offset: u32 = @bitCast(@as(i32, a.imm * 4));
+    const dst = pc +% 4 +% offset;
+    try w.print("{s} {}, 0x{x}", .{ op, FmtReg{ .v = a.rs }, dst });
 }
 fn fmt_r_type(w: anytype, op: []const u8, a: RTypeArgs) !void {
     try w.print("{s} {}, {}, {}", .{ op, FmtReg{ .v = a.rd }, FmtReg{ .v = a.rs }, FmtReg{ .v = a.rt } });
@@ -121,12 +131,15 @@ fn fmt_j_type(w: anytype, op: []const u8, pc: u32, a: JTypeArgs) !void {
 }
 
 pub const FmtInst = struct {
-    v: Inst,
+    v: ?Inst,
     pc: u32,
     const Self = @This();
 
     pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        const inst = self.v;
+        const inst = self.v orelse {
+            try writer.print("???", .{});
+            return;
+        };
         // Pseudo opcodes
         switch (inst) {
             .sll => |a| {
@@ -158,7 +171,7 @@ pub const FmtInst = struct {
             .swl => |a| fmt_i_ld_st_type(writer, "swl", a),
             .swr => |a| fmt_i_ld_st_type(writer, "swr", a),
             .addi => |a| fmt_i_signed_type(writer, "addi", a),
-            .addiu => |a| fmt_i_type(writer, "addiu", a),
+            .addiu => |a| fmt_i_signed_type(writer, "addiu", a),
             .slti => |a| fmt_i_signed_type(writer, "slti", a),
             .sltiu => |a| fmt_i_type(writer, "sltiu", a),
             .andi => |a| fmt_i_type(writer, "andi", a),
@@ -193,14 +206,14 @@ pub const FmtInst = struct {
             .jal => |a| fmt_j_type(writer, "jal", self.pc, a),
             .jr => |a| fmt_r_type(writer, "jr", a),
             .jalr => |a| fmt_r_type(writer, "jalr", a),
-            .beq => |a| fmt_i_signed_type(writer, "beq", a),
-            .bne => |a| fmt_i_signed_type(writer, "bne", a),
-            .blez => |a| fmt_i_rs_imm_type(writer, "blez", a),
-            .bgtz => |a| fmt_i_rs_imm_type(writer, "bgtz", a),
-            .bltz => |a| fmt_i_rs_imm_type(writer, "bltz", a),
-            .bgez => |a| fmt_i_rs_imm_type(writer, "bgez", a),
-            .bltzal => |a| fmt_i_rs_imm_type(writer, "bltzal", a),
-            .bgezal => |a| fmt_i_rs_imm_type(writer, "bgezal", a),
+            .beq => |a| fmt_i_branch_type(writer, "beq", self.pc, a),
+            .bne => |a| fmt_i_branch_type(writer, "bne", self.pc, a),
+            .blez => |a| fmt_i_rs_imm_branch_type(writer, "blez", self.pc, a),
+            .bgtz => |a| fmt_i_rs_imm_branch_type(writer, "bgtz", self.pc, a),
+            .bltz => |a| fmt_i_rs_imm_branch_type(writer, "bltz", self.pc, a),
+            .bgez => |a| fmt_i_rs_imm_branch_type(writer, "bgez", self.pc, a),
+            .bltzal => |a| fmt_i_rs_imm_branch_type(writer, "bltzal", self.pc, a),
+            .bgezal => |a| fmt_i_rs_imm_branch_type(writer, "bgezal", self.pc, a),
             .sys => |a| fmt_r_type(writer, "sys", a),
             .brk => |a| fmt_r_type(writer, "brk", a),
             .lwc0 => |a| fmt_i_ld_st_type(writer, "lwc0", a),
@@ -227,3 +240,7 @@ pub const FmtInst = struct {
         };
     }
 };
+
+pub fn print_disasm(writer: anytype, pc: u32, inst_raw: u32, inst: ?Inst) !void {
+    writer.print("{x:0>8}: {x:0>8} {}\n", .{ pc, inst_raw, FmtInst{ .v = inst, .pc = pc } }) catch @panic("write");
+}

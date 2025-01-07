@@ -198,7 +198,7 @@ fn i_type(v: u32) ITypeArgs {
     return .{ .rs = rs(v), .rt = rt(v), .imm = imm16(v) };
 }
 
-pub fn decode(v: u32) Inst {
+pub fn decode(v: u32) ?Inst {
     const inst = switch (dec_opcode(v)) {
         OPCODE_SPECIAL => switch (dec_special_opcode(v)) {
             SPECIAL_OPCODE_SLL => Inst{ .sll = r_type(v) },
@@ -229,14 +229,14 @@ pub fn decode(v: u32) Inst {
             SPECIAL_OPCODE_OR => Inst{ .@"or" = r_type(v) },
             SPECIAL_OPCODE_XOR => Inst{ .xor = r_type(v) },
             SPECIAL_OPCODE_NOR => Inst{ .nor = r_type(v) },
-            else => @panic("TODO: unknown opcode"),
+            else => null,
         },
         OPCODE_BcondZ => switch (dec_bcondz_opcode(v)) {
             BCONDZ_OPCODE_BLTZ => Inst{ .bltz = i_type(v) },
             BCONDZ_OPCODE_BGEZ => Inst{ .bgez = i_type(v) },
             BCONDZ_OPCODE_BLTZAL => Inst{ .bltzal = i_type(v) },
             BCONDZ_OPCODE_BGEZAL => Inst{ .bgezal = i_type(v) },
-            else => @panic("TODO: unknown opcode"),
+            else => null,
         },
         OPCODE_J => Inst{ .j = j_type(v) },
         OPCODE_JAL => Inst{ .jal = j_type(v) },
@@ -277,7 +277,7 @@ pub fn decode(v: u32) Inst {
             else => switch (dec_cop_bc_opcode(v)) {
                 COP_BC_OPCODE_BCF => Inst{ .bc0f = i_type(v) },
                 COP_BC_OPCODE_BCT => Inst{ .bc0t = i_type(v) },
-                else => @panic("TODO: unknown opcode"),
+                else => null,
             },
         },
         OPCODE_COP2 => switch (dec_cop_opcode(v)) {
@@ -288,14 +288,14 @@ pub fn decode(v: u32) Inst {
             else => switch (dec_cop_bc_opcode(v)) {
                 COP_BC_OPCODE_BCF => Inst{ .bc0f = i_type(v) },
                 COP_BC_OPCODE_BCT => Inst{ .bc0t = i_type(v) },
-                else => @panic("TODO: unknown opcode"),
+                else => null,
             },
         },
         OPCODE_LWC0 => Inst{ .lwc0 = i_type(v) },
         OPCODE_LWC2 => Inst{ .lwc2 = i_type(v) },
         OPCODE_SWC0 => Inst{ .swc0 = i_type(v) },
         OPCODE_SWC2 => Inst{ .swc2 = i_type(v) },
-        else => @panic("TODO: unknown opcode"),
+        else => null,
     };
     return inst;
 }

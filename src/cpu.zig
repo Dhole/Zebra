@@ -1,6 +1,7 @@
 const std = @import("std");
 const log = std.log;
 const mem = std.mem;
+const ArrayList = std.ArrayList;
 
 const root = @import("root.zig");
 const Inst = root.Inst;
@@ -13,6 +14,7 @@ const decode = decoder.decode;
 const disasm = @import("disasm.zig");
 const FmtReg = disasm.FmtReg;
 const FmtInst = disasm.FmtInst;
+const print_disasm = disasm.print_disasm;
 
 const MEM_SIZE: usize = 4 * 512 * 1024; // 2 MiB
 pub const BIOS_SIZE: usize = 512 * 1024; // 512 KiB
@@ -28,12 +30,54 @@ const ADDR_RESET: u32 = ADDR_BIOS;
 const ADDR_SCRATCH: u32 = 0x1f80_0000;
 const ADDR_HWREGS: u32 = 0x1f80_1000;
 
+fn buf_read(comptime T: type, buf: []const u8, addr: u32) T {
+    return switch (T) {
+        u8 => buf[addr],
+        u16 => @as(u16, buf[addr]) + @as(u16, buf[addr + 1]) * 0x100,
+        u32 => @as(u32, buf[addr]) + @as(u32, buf[addr + 1]) * 0x100 +
+            @as(u32, buf[addr + 2]) * 0x10000 + @as(u32, buf[addr + 3]) * 0x1000000,
+        else => @compileError("invalid T"),
+    };
+}
+
+fn buf_write(comptime T: type, buf: []u8, addr: u32, v: T) void {
+    switch (T) {
+        u8 => {
+            buf[addr] = @intCast(v);
+        },
+        u16 => {
+            buf[addr + 0] = @intCast((v & 0x00ff) >> 0);
+            buf[addr + 1] = @intCast((v & 0xff00) >> 8);
+        },
+        u32 => {
+            buf[addr + 0] = @intCast((v & 0x000000ff) >> 0);
+            buf[addr + 1] = @intCast((v & 0x0000ff00) >> 8);
+            buf[addr + 2] = @intCast((v & 0x00ff0000) >> 16);
+            buf[addr + 3] = @intCast((v & 0xff000000) >> 24);
+        },
+        else => @compileError("invalid T"),
+    }
+}
+
 pub const Cfg = struct {
     dbg: bool = false,
 };
 
-pub const Dbg = struct {
+const Dbg = struct {
     trace_inst: bool = false,
+    breaks: ArrayList(u32),
+    _break: bool = false,
+    _first_step: bool = true,
+
+    fn init(allocator: mem.Allocator) Dbg {
+        return Dbg{
+            .breaks = ArrayList(u32).init(allocator),
+        };
+    }
+
+    fn deinit(self: *Dbg) void {
+        self.breaks.deinit();
+    }
 };
 
 pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
@@ -66,7 +110,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             const self = Self{
                 .dbg_w = dbg_writer,
                 .cfg = cfg,
-                .dbg = Dbg{},
+                .dbg = Dbg.init(allocator),
                 .r = [_]u32{0} ** 32,
                 .pc = ADDR_RESET,
                 .lo = 0,
@@ -81,6 +125,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         pub fn deinit(self: *Self) void {
             self.allocator.free(self.mem);
             self.allocator.free(self.bios);
+            self.dbg.deinit();
         }
 
         pub fn format_regs(self: *const Self, writer: anytype) !void {
@@ -102,12 +147,40 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             }
         }
 
+        // Run/Continue execution until a breakpoint
+        pub fn dbg_run(self: *Self) void {
+            if (!self.cfg.dbg) {
+                @panic("dbg = false");
+            }
+            self.dbg._first_step = true;
+            defer self.dbg._first_step = true;
+            while (true) {
+                self.step();
+                if (self.dbg._break) {
+                    self.dbg_w.print("Breakpoint at {x:0>8}\n", .{self.pc}) catch @panic("write");
+                    self.dbg._break = false;
+                    return;
+                }
+                self.dbg._first_step = false;
+            }
+        }
+
         pub fn step(self: *Self) void {
             // Fetch next instruction
-            const inst_raw = self.read_u32(self.pc);
-            const inst = decode(inst_raw);
-            if (self.cfg.dbg and self.dbg.trace_inst) {
-                self.dbg_w.print("{x:0>8}: {x:0>8} {}\n", .{ self.pc, inst_raw, FmtInst{ .v = inst, .pc = self.pc } }) catch @panic("write");
+            const inst_raw = self.read(u32, self.pc);
+            const inst = decode(inst_raw) orelse @panic("TODO: unknown inst");
+            if (self.cfg.dbg) {
+                if (self.dbg.trace_inst) {
+                    print_disasm(self.dbg_w, self.pc, inst_raw, inst) catch @panic("write");
+                }
+                if (!self.dbg._first_step) {
+                    for (self.dbg.breaks.items) |addr| {
+                        if (addr == self.pc) {
+                            self.dbg._break = true;
+                            return;
+                        }
+                    }
+                }
             }
             self.exec(inst);
         }
@@ -126,7 +199,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 },
                 .sw => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
-                    self.write_u32(self.r[a.rs] +% offset, self.r[a.rt]);
+                    self.write(u32, self.r[a.rs] +% offset, self.r[a.rt]);
                     self.pc += 4;
                 },
                 .sll => |a| {
@@ -139,7 +212,19 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     self.pc += 4;
                 },
                 .j => |a| {
-                    self.pc = (self.pc & 0xf0000000) + a.imm * 4;
+                    const new_pc = (self.pc & 0xf0000000) + a.imm * 4;
+                    self.pc += 4;
+                    // Execute instruction in the branch delay slot
+                    self.step();
+                    self.pc = new_pc;
+                },
+                .jal => |a| {
+                    const new_pc = (self.pc & 0xf0000000) + a.imm * 4;
+                    self.r[31] = self.pc + 8;
+                    self.pc += 4;
+                    // Execute instruction in the branch delay slot
+                    self.step();
+                    self.pc = new_pc;
                 },
                 .@"or" => |a| {
                     self.r[a.rd] = self.r[a.rs] | self.r[a.rt];
@@ -167,44 +252,73 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     self.r[a.rt] = self.r[a.rs] +% imm;
                     self.pc += 4;
                 },
+                .lw => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    self.r[a.rt] = self.read(u32, self.r[a.rs] +% offset);
+                    self.pc += 4;
+                },
+                .sltu => |a| {
+                    if (self.r[a.rs] < self.r[a.rt]) {
+                        self.r[a.rd] = 1;
+                    } else {
+                        self.r[a.rd] = 0;
+                    }
+                    self.pc += 4;
+                },
+                .addu => |a| {
+                    self.r[a.rd] = self.r[a.rs] +% self.r[a.rt];
+                    self.pc += 4;
+                },
+                .sh => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    self.write(u16, self.r[a.rs] +% offset, @intCast(self.r[a.rt] & 0xffff));
+                    self.pc += 4;
+                },
+                .andi => |a| {
+                    _ = a;
+                    @panic("TODO");
+                },
                 else => @panic("TODO"),
             }
         }
 
-        fn mem_read_u16(self: *Self, addr: u32) u16 {
-            return @as(u32, self.mem[addr]) + @as(u32, self.mem[addr + 1]) * 0x100;
+        fn mem_read(self: *Self, comptime T: type, addr: u32) T {
+            return buf_read(T, self.mem, addr);
         }
 
-        fn mem_read_u32(self: *Self, addr: u32) u32 {
-            return @as(u32, self.mem[addr]) + @as(u32, self.mem[addr + 1]) * 0x100 +
-                @as(u32, self.mem[addr + 2]) * 0x10000 + @as(u32, self.mem[addr + 3]) * 0x1000000;
+        fn mem_write(self: *Self, comptime T: type, addr: u32, v: T) void {
+            buf_write(T, self.mem, addr, v);
         }
 
-        fn mem_write_u32(self: *Self, addr: u32, v: u32) void {
-            self.mem[addr + 0] = @intCast((v & 0x000000ff) >> 0);
-            self.mem[addr + 1] = @intCast((v & 0x0000ff00) >> 8);
-            self.mem[addr + 2] = @intCast((v & 0x00ff0000) >> 16);
-            self.mem[addr + 3] = @intCast((v & 0xff000000) >> 24);
+        // fn mem_write_u32(self: *Self, addr: u32, v: u32) void {
+        //     self.mem[addr + 0] = @intCast((v & 0x000000ff) >> 0);
+        //     self.mem[addr + 1] = @intCast((v & 0x0000ff00) >> 8);
+        //     self.mem[addr + 2] = @intCast((v & 0x00ff0000) >> 16);
+        //     self.mem[addr + 3] = @intCast((v & 0xff000000) >> 24);
+        // }
+
+        fn bios_read(self: *Self, comptime T: type, addr: u32) T {
+            return buf_read(T, self.bios, addr);
         }
 
-        fn bios_read_u16(self: *Self, addr: u32) u16 {
-            return @as(u32, self.bios[addr]) + @as(u32, self.bios[addr + 1]) * 0x100;
-        }
+        // fn bios_read_u16(self: *Self, addr: u32) u16 {
+        //     return @as(u32, self.bios[addr]) + @as(u32, self.bios[addr + 1]) * 0x100;
+        // }
 
-        fn bios_read_u32(self: *Self, addr: u32) u32 {
-            return @as(u32, self.bios[addr]) + @as(u32, self.bios[addr + 1]) * 0x100 +
-                @as(u32, self.bios[addr + 2]) * 0x10000 + @as(u32, self.bios[addr + 3]) * 0x1000000;
-        }
+        // fn bios_read_u32(self: *Self, addr: u32) u32 {
+        //     return @as(u32, self.bios[addr]) + @as(u32, self.bios[addr + 1]) * 0x100 +
+        //         @as(u32, self.bios[addr + 2]) * 0x10000 + @as(u32, self.bios[addr + 3]) * 0x1000000;
+        // }
 
-        fn read_u16(self: *Self, addr: u32) u16 {
+        pub fn read(self: *Self, comptime T: type, addr: u32) T {
             if (ADDR_KUSEG <= addr and addr < ADDR_KUSEG + MEM_SIZE) {
-                return self.mem_read_u16(addr - ADDR_KUSEG);
+                return self.mem_read(T, addr - ADDR_KUSEG);
             } else if (ADDR_KSEG0 <= addr and addr < ADDR_KSEG0 + MEM_SIZE) {
-                return self.mem_read_u16(addr - ADDR_KSEG0);
+                return self.mem_read(T, addr - ADDR_KSEG0);
             } else if (ADDR_KSEG1 <= addr and addr < ADDR_KSEG1 + MEM_SIZE) {
-                return self.mem_read_u16(addr - ADDR_KSEG1);
+                return self.mem_read(T, addr - ADDR_KSEG1);
             } else if (ADDR_BIOS <= addr and addr < ADDR_BIOS + BIOS_SIZE) {
-                return self.bios_read_u16(addr - ADDR_BIOS);
+                return self.bios_read(T, addr - ADDR_BIOS);
             } else if (ADDR_HWREGS <= addr and addr < ADDR_HWREGS + HWREGS_SIZE) {
                 @panic("TODO: HWREGS");
             } else {
@@ -212,13 +326,13 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             }
         }
 
-        fn write_u32(self: *Self, addr: u32, v: u32) void {
+        fn write(self: *Self, comptime T: type, addr: u32, v: T) void {
             if (ADDR_KUSEG <= addr and addr < ADDR_KUSEG + MEM_SIZE) {
-                self.mem_write_u32(addr - ADDR_KUSEG, v);
+                self.mem_write(T, addr - ADDR_KUSEG, v);
             } else if (ADDR_KSEG0 <= addr and addr < ADDR_KSEG0 + MEM_SIZE) {
-                self.mem_write_u32(addr - ADDR_KSEG0, v);
+                self.mem_write(T, addr - ADDR_KSEG0, v);
             } else if (ADDR_KSEG1 <= addr and addr < ADDR_KSEG1 + MEM_SIZE) {
-                self.mem_write_u32(addr - ADDR_KSEG0, v);
+                self.mem_write(T, addr - ADDR_KSEG1, v);
             } else if (ADDR_HWREGS <= addr and addr < ADDR_HWREGS + HWREGS_SIZE) {
                 // TODO
                 // @panic("TODO: HWREGS");
@@ -230,18 +344,36 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             }
         }
 
-        pub fn read_u32(self: *Self, addr: u32) u32 {
-            if (ADDR_KUSEG <= addr and addr < ADDR_KUSEG + MEM_SIZE) {
-                return self.mem_read_u32(addr - ADDR_KUSEG);
-            } else if (ADDR_KSEG0 <= addr and addr < ADDR_KSEG0 + MEM_SIZE) {
-                return self.mem_read_u32(addr - ADDR_KSEG0);
-            } else if (ADDR_KSEG1 <= addr and addr < ADDR_KSEG1 + MEM_SIZE) {
-                return self.mem_read_u32(addr - ADDR_KSEG1);
-            } else if (ADDR_BIOS <= addr and addr < ADDR_BIOS + BIOS_SIZE) {
-                return self.bios_read_u32(addr - ADDR_BIOS);
-            } else {
-                @panic("TODO");
-            }
-        }
+        // fn write_u32(self: *Self, addr: u32, v: u32) void {
+        //     if (ADDR_KUSEG <= addr and addr < ADDR_KUSEG + MEM_SIZE) {
+        //         self.mem_write_u32(addr - ADDR_KUSEG, v);
+        //     } else if (ADDR_KSEG0 <= addr and addr < ADDR_KSEG0 + MEM_SIZE) {
+        //         self.mem_write_u32(addr - ADDR_KSEG0, v);
+        //     } else if (ADDR_KSEG1 <= addr and addr < ADDR_KSEG1 + MEM_SIZE) {
+        //         self.mem_write_u32(addr - ADDR_KSEG1, v);
+        //     } else if (ADDR_HWREGS <= addr and addr < ADDR_HWREGS + HWREGS_SIZE) {
+        //         // TODO
+        //         // @panic("TODO: HWREGS");
+        //     } else if (ADDR_KSEG2 <= addr and addr < ADDR_KSEG2 + CACHECTL_SIZE) {
+        //         // TODO
+        //         // @panic("TODO: CACHECTL");
+        //     } else {
+        //         @panic("TODO");
+        //     }
+        // }
+
+        // pub fn read_u32(self: *Self, addr: u32) u32 {
+        //     if (ADDR_KUSEG <= addr and addr < ADDR_KUSEG + MEM_SIZE) {
+        //         return self.mem_read_u32(addr - ADDR_KUSEG);
+        //     } else if (ADDR_KSEG0 <= addr and addr < ADDR_KSEG0 + MEM_SIZE) {
+        //         return self.mem_read_u32(addr - ADDR_KSEG0);
+        //     } else if (ADDR_KSEG1 <= addr and addr < ADDR_KSEG1 + MEM_SIZE) {
+        //         return self.mem_read_u32(addr - ADDR_KSEG1);
+        //     } else if (ADDR_BIOS <= addr and addr < ADDR_BIOS + BIOS_SIZE) {
+        //         return self.bios_read_u32(addr - ADDR_BIOS);
+        //     } else {
+        //         @panic("TODO");
+        //     }
+        // }
     };
 }

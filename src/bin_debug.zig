@@ -5,6 +5,7 @@ const argsParser = @import("args");
 const decoder = @import("decoder.zig");
 const decode = decoder.decode;
 const disasm = @import("disasm.zig");
+const print_disasm = disasm.print_disasm;
 const FmtInst = disasm.FmtInst;
 const _cpu = @import("cpu.zig");
 const Cpu = _cpu.Cpu;
@@ -18,18 +19,18 @@ pub fn main() !void {
 
     const Options = struct {
         bios: ?[]const u8 = null,
-        num: u64 = 0x100000000,
+        cmd: ?[]const u8 = null,
         help: bool = false,
 
         pub const shorthands = .{
             .b = "bios",
-            .n = "num",
+            .c = "cmd",
         };
 
         pub const meta = .{
             .option_docs = .{
                 .bios = "<BIN> BIOS file path",
-                .num = "<NUM> Number of instructions to emulate",
+                .cmd = "<CMD> Initial list of commands, separated by `;`",
                 .help = "Print help",
             },
         };
@@ -59,10 +60,18 @@ pub fn main() !void {
     var cpu = try Cpu(@TypeOf(w), cfg).init(allocator, bios, w);
     defer cpu.deinit();
 
+    var init_cmd_it = std.mem.tokenizeSequence(u8, opts.cmd orelse "", ";");
+
     var last_cmd: Cmd = .nop;
-    while (true) {
+    loop: while (true) {
         try w.print("> ", .{});
-        const buf_input = try r.readUntilDelimiterOrEof(&buf, '\n');
+        var buf_input: ?[]const u8 = undefined;
+        if (init_cmd_it.next()) |cmd_str| {
+            buf_input = cmd_str;
+        } else {
+            buf_input = try r.readUntilDelimiterOrEof(&buf, '\n');
+        }
+
         const input = buf_input orelse break;
         const cmd = parse_input(input) catch |err| {
             switch (err) {
@@ -81,6 +90,38 @@ pub fn main() !void {
                     cpu.step();
                 }
             },
+            .@"continue" => {
+                cpu.dbg_run();
+            },
+            .disasm => |a| {
+                try disasm_block(w, &cpu, cpu.pc, a.n);
+            },
+            .disasm_at => |a| {
+                try disasm_block(w, &cpu, a.addr, a.n);
+            },
+            .@"break" => |a| {
+                for (cpu.dbg.breaks.items) |addr| {
+                    if (addr == a.addr) {
+                        try w.print("ERR: Duplicate breakpoint\n", .{});
+                        continue :loop;
+                    }
+                }
+                try cpu.dbg.breaks.append(a.addr);
+            },
+            .delete_break => |a| {
+                for (cpu.dbg.breaks.items, 0..) |addr, i| {
+                    if (addr == a.addr) {
+                        _ = cpu.dbg.breaks.orderedRemove(i);
+                        continue :loop;
+                    }
+                }
+                try w.print("ERR: Breakpoint not found\n", .{});
+            },
+            .info_breaks => {
+                for (cpu.dbg.breaks.items, 0..) |addr, i| {
+                    try w.print("break {d} at {x:0>8}\n", .{ i, addr });
+                }
+            },
             .regs => try cpu.format_regs(w),
             .help => try print_help(w),
             .unknown => {
@@ -95,13 +136,21 @@ pub fn main() !void {
 const Cmd = union(enum) {
     step: struct { n: usize },
     trace_inst: struct { v: bool },
+    @"continue",
+    @"break": struct { addr: u32 },
+    delete_break: struct { addr: u32 },
+    info_breaks,
+    disasm: struct { n: u32 },
+    disasm_at: struct { addr: u32, n: u32 },
     regs,
     help,
     unknown,
     nop,
 };
 
-fn parse_bool(arg: []const u8) !bool {
+// it: *std.mem.TokenIterator
+fn parse_bool(it: anytype) !bool {
+    const arg = it.next() orelse return error.MissingArgument;
     if (eql(u8, arg, "t")) {
         return true;
     } else if (eql(u8, arg, "f")) {
@@ -109,6 +158,18 @@ fn parse_bool(arg: []const u8) !bool {
     } else {
         return error.InvalidArgument;
     }
+}
+
+// it: *std.mem.TokenIterator
+fn parse_word(it: anytype) !u32 {
+    const arg = it.next() orelse return error.MissingArgument;
+    return std.fmt.parseInt(u32, arg, 16) catch error.InvalidArgument;
+}
+
+// it: *std.mem.TokenIterator
+fn parse_int_or(comptime T: type, it: anytype, default: T) !T {
+    const arg = it.next() orelse return default;
+    return std.fmt.parseInt(T, arg, 0) catch error.InvalidArgument;
 }
 
 fn parse_input(input: []const u8) !?Cmd {
@@ -120,17 +181,29 @@ fn parse_input(input: []const u8) !?Cmd {
         return .help;
     } else if (eql(u8, cmd, "r")) {
         return .regs;
+    } else if (eql(u8, cmd, "c")) {
+        return .@"continue";
+    } else if (eql(u8, cmd, "ib")) {
+        return .info_breaks;
+    } else if (eql(u8, cmd, "b")) {
+        const addr = try parse_word(&it);
+        return .{ .@"break" = .{ .addr = addr } };
+    } else if (eql(u8, cmd, "db")) {
+        const addr = try parse_word(&it);
+        return .{ .delete_break = .{ .addr = addr } };
     } else if (eql(u8, cmd, "trace_inst")) {
-        const value = try parse_bool(it.next() orelse return error.MissingArgument);
+        const value = try parse_bool(&it);
         return .{ .trace_inst = .{ .v = value } };
     } else if (eql(u8, cmd, "s")) {
-        const n = if (it.next()) |n_str|
-            std.fmt.parseInt(usize, n_str, 0) catch {
-                return error.InvalidArgument;
-            }
-        else
-            1;
+        const n = try parse_int_or(usize, &it, 1);
         return .{ .step = .{ .n = n } };
+    } else if (eql(u8, cmd, "l")) {
+        const n = try parse_int_or(u32, &it, 10);
+        return .{ .disasm = .{ .n = n } };
+    } else if (eql(u8, cmd, "la")) {
+        const addr = try parse_word(&it);
+        const n = try parse_int_or(u32, &it, 10);
+        return .{ .disasm_at = .{ .addr = addr, .n = n } };
     } else {
         return .unknown;
     }
@@ -140,9 +213,27 @@ fn print_help(w: anytype) !void {
     try w.print(
         \\Commands:
         \\ h : Print help
-        \\ s [n] : Step `n` or 1 instruction
-        \\ trace_inst {{t,f}} : Enable/disable tracing all executed instructions
+        \\ s (n) : Step `n` or 1 instruction
+        \\ c : Continue runnig until the next breakpoint
         \\ r : Print CPU Registers
+        \\ trace_inst {{t,f}} : Enable/disable tracing all executed instructions
+        \\ b [addr] : Add breakpoint at `addr`
+        \\ db [addr] : Delete breakpoint at `addr`
+        \\ ib : (Info) List all breakpoints
+        \\ l (n) : List disassembly of `n` or 10 instructions at PC
+        \\ la [addr] (n) : List disassembly of `n` or 10 instructions at `addr`
+        \\ d [addr] (n) : Dump `n` or 256 bytes of memory at `addr`
         \\
     , .{});
+}
+
+// cpu: *Cpu
+fn disasm_block(writer: anytype, cpu: anytype, addr: u32, n: u32) !void {
+    for (0..n) |i| {
+        const i_u32: u32 = @intCast(i);
+        const a: u32 = addr + i_u32 * 4;
+        const inst_raw = cpu.read(u32, a);
+        const inst = decode(inst_raw);
+        try print_disasm(writer, a, inst_raw, inst);
+    }
 }

@@ -62,7 +62,7 @@ pub fn main() !void {
         } else if (n < 4) {
             unreachable;
         }
-        const addr = i + opts_offset;
+        const addr = opts_offset + i * 4;
         const v = std.mem.readVarInt(u32, &buf, std.builtin.Endian.little);
         const inst = decode(v);
         try w.print("{x:0>8}: {x:0>8} {}", .{ addr, v, FmtInst{ .v = inst, .pc = addr } });
