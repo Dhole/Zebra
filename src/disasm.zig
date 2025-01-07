@@ -129,6 +129,12 @@ fn fmt_r_rd_rt_imm_type(w: anytype, op: []const u8, a: RTypeArgs) !void {
 fn fmt_j_type(w: anytype, op: []const u8, pc: u32, a: JTypeArgs) !void {
     try w.print("{s} 0x{x}", .{ op, (pc & 0xf0000000) + a.imm * 4 });
 }
+fn fmt_jr(w: anytype, op: []const u8, a: RTypeArgs) !void {
+    try w.print("{s} {}", .{ op, FmtReg{ .v = a.rs } });
+}
+fn fmt_jalr(w: anytype, op: []const u8, a: RTypeArgs) !void {
+    try w.print("{s} {}, {}", .{ op, FmtReg{ .v = a.rd }, FmtReg{ .v = a.rs } });
+}
 
 pub const FmtInst = struct {
     v: ?Inst,
@@ -204,8 +210,8 @@ pub const FmtInst = struct {
             .mtlo => |a| fmt_r_type(writer, "mtlo", a),
             .j => |a| fmt_j_type(writer, "j", self.pc, a),
             .jal => |a| fmt_j_type(writer, "jal", self.pc, a),
-            .jr => |a| fmt_r_type(writer, "jr", a),
-            .jalr => |a| fmt_r_type(writer, "jalr", a),
+            .jr => |a| fmt_jr(writer, "jr", a),
+            .jalr => |a| fmt_jalr(writer, "jalr", a),
             .beq => |a| fmt_i_branch_type(writer, "beq", self.pc, a),
             .bne => |a| fmt_i_branch_type(writer, "bne", self.pc, a),
             .blez => |a| fmt_i_rs_imm_branch_type(writer, "blez", self.pc, a),
@@ -242,5 +248,5 @@ pub const FmtInst = struct {
 };
 
 pub fn print_disasm(writer: anytype, pc: u32, inst_raw: u32, inst: ?Inst) !void {
-    writer.print("{x:0>8}: {x:0>8} {}\n", .{ pc, inst_raw, FmtInst{ .v = inst, .pc = pc } }) catch @panic("write");
+    writer.print("{x:0>8} : {x:0>8} {}\n", .{ pc, inst_raw, FmtInst{ .v = inst, .pc = pc } }) catch @panic("write");
 }

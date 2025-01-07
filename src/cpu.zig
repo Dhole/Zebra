@@ -17,18 +17,24 @@ const FmtInst = disasm.FmtInst;
 const print_disasm = disasm.print_disasm;
 
 const MEM_SIZE: usize = 4 * 512 * 1024; // 2 MiB
-pub const BIOS_SIZE: usize = 512 * 1024; // 512 KiB
+const EXP_REG1_SIZE: usize = 8 * 1024; // 8 KiB
 const SCRATCH_SIZE: usize = 1024; // 1 KiB
-const HWREGS_SIZE: usize = 8 * 1024; // 8 KiB
+const IO_PORTS_SIZE: usize = 8 * 1024; // 8 KiB
+const EXP_REG2_SIZE: usize = 8 * 1024; // 8 KiB
+const EXP_REG3_SIZE: usize = 2 * 1024 * 1024; // 2 MiB
+pub const BIOS_SIZE: usize = 512 * 1024; // 512 KiB
 const CACHECTL_SIZE: usize = 512; // 0.5 KiB
-const ADDR_BIOS: u32 = 0xbfc0_0000;
 const ADDR_KUSEG: u32 = 0x0000_0000;
 const ADDR_KSEG0: u32 = 0x8000_0000;
 const ADDR_KSEG1: u32 = 0xa000_0000;
 const ADDR_KSEG2: u32 = 0xfffe_0000;
 const ADDR_RESET: u32 = ADDR_BIOS;
+const ADDR_EXP_REG1: u32 = 0x1f00_0000;
 const ADDR_SCRATCH: u32 = 0x1f80_0000;
-const ADDR_HWREGS: u32 = 0x1f80_1000;
+const ADDR_IO_PORTS: u32 = 0x1f80_1000;
+const ADDR_EXP_REG2: u32 = 0x1f80_2000;
+const ADDR_EXP_REG3: u32 = 0x1fa0_0000;
+const ADDR_BIOS: u32 = 0xbfc0_0000;
 
 fn buf_read(comptime T: type, buf: []const u8, addr: u32) T {
     return switch (T) {
@@ -237,14 +243,10 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     self.pc += 4;
                 },
                 .bne => |a| {
-                    self.pc += 4;
-                    if (self.r[a.rs] != self.r[a.rt]) {
-                        const pc = self.pc;
-                        // Execute instruction in the branch delay slot
-                        self.step();
-                        const offset: u32 = @bitCast(@as(i32, a.imm * 4));
-                        self.pc = pc +% offset;
-                    }
+                    self.branch_cmp(self.r[a.rs] != self.r[a.rt], a.imm);
+                },
+                .beq => |a| {
+                    self.branch_cmp(self.r[a.rs] == self.r[a.rt], a.imm);
                 },
                 .addi => |a| {
                     // TODO: overflow trap
@@ -275,10 +277,58 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     self.pc += 4;
                 },
                 .andi => |a| {
+                    const imm: u16 = @bitCast(a.imm);
+                    self.r[a.rt] = self.r[a.rs] & @as(u32, imm);
+                    self.pc += 4;
+                },
+                .sb => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    self.write(u8, self.r[a.rs] +% offset, @intCast(self.r[a.rt] & 0xff));
+                    self.pc += 4;
+                },
+                .jr => |a| {
+                    const new_pc = self.r[a.rs];
+                    self.pc += 4;
+                    // Execute instruction in the branch delay slot
+                    self.step();
+                    self.pc = new_pc;
+                },
+                .lb => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    self.r[a.rt] = @as(u32, self.read(u8, self.r[a.rs] +% offset));
+                    self.pc += 4;
+                },
+                .mfc0 => |a| {
                     _ = a;
-                    @panic("TODO");
+                    self.pc += 4;
+                    // TODO
+                },
+                .@"and" => |a| {
+                    self.r[a.rd] = self.r[a.rs] & self.r[a.rt];
+                    self.pc += 4;
+                },
+                .add => |a| {
+                    // TODO: overflow trap
+                    self.r[a.rd] = self.r[a.rs] +% self.r[a.rt];
+                    self.pc += 4;
+                },
+                .bc0f => |a| {
+                    _ = a;
+                    self.pc += 4;
+                    // TODO
                 },
                 else => @panic("TODO"),
+            }
+        }
+
+        fn branch_cmp(self: *Self, cmp_result: bool, imm: i16) void {
+            self.pc += 4;
+            if (cmp_result) {
+                const pc = self.pc;
+                // Execute instruction in the branch delay slot
+                self.step();
+                const offset: u32 = @bitCast(@as(i32, imm * 4));
+                self.pc = pc +% offset;
             }
         }
 
@@ -319,8 +369,16 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 return self.mem_read(T, addr - ADDR_KSEG1);
             } else if (ADDR_BIOS <= addr and addr < ADDR_BIOS + BIOS_SIZE) {
                 return self.bios_read(T, addr - ADDR_BIOS);
-            } else if (ADDR_HWREGS <= addr and addr < ADDR_HWREGS + HWREGS_SIZE) {
-                @panic("TODO: HWREGS");
+            } else if (ADDR_EXP_REG1 <= addr and addr < ADDR_EXP_REG1 + EXP_REG1_SIZE) {
+                // TODO
+                // @panic("TODO: EXP_REG1");
+                return 0;
+            } else if (ADDR_IO_PORTS <= addr and addr < ADDR_IO_PORTS + IO_PORTS_SIZE) {
+                @panic("TODO: IO_PORTS");
+            } else if (ADDR_KSEG2 <= addr and addr < ADDR_KSEG2 + CACHECTL_SIZE) {
+                // TODO
+                // @panic("TODO: CACHECTL");
+                return 0;
             } else {
                 @panic("TODO");
             }
@@ -333,9 +391,9 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 self.mem_write(T, addr - ADDR_KSEG0, v);
             } else if (ADDR_KSEG1 <= addr and addr < ADDR_KSEG1 + MEM_SIZE) {
                 self.mem_write(T, addr - ADDR_KSEG1, v);
-            } else if (ADDR_HWREGS <= addr and addr < ADDR_HWREGS + HWREGS_SIZE) {
+            } else if (ADDR_IO_PORTS <= addr and addr < ADDR_IO_PORTS + IO_PORTS_SIZE) {
                 // TODO
-                // @panic("TODO: HWREGS");
+                // @panic("TODO: IO_PORTS");
             } else if (ADDR_KSEG2 <= addr and addr < ADDR_KSEG2 + CACHECTL_SIZE) {
                 // TODO
                 // @panic("TODO: CACHECTL");
@@ -351,9 +409,9 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         //         self.mem_write_u32(addr - ADDR_KSEG0, v);
         //     } else if (ADDR_KSEG1 <= addr and addr < ADDR_KSEG1 + MEM_SIZE) {
         //         self.mem_write_u32(addr - ADDR_KSEG1, v);
-        //     } else if (ADDR_HWREGS <= addr and addr < ADDR_HWREGS + HWREGS_SIZE) {
+        //     } else if (ADDR_IO_PORTS <= addr and addr < ADDR_IO_PORTS + IO_PORTS_SIZE) {
         //         // TODO
-        //         // @panic("TODO: HWREGS");
+        //         // @panic("TODO: IO_PORTS");
         //     } else if (ADDR_KSEG2 <= addr and addr < ADDR_KSEG2 + CACHECTL_SIZE) {
         //         // TODO
         //         // @panic("TODO: CACHECTL");
