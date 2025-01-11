@@ -67,6 +67,7 @@ pub fn main() !void {
         try w.print("> ", .{});
         var buf_input: ?[]const u8 = undefined;
         if (init_cmd_it.next()) |cmd_str| {
+            try w.print("{s}\n", .{cmd_str});
             buf_input = cmd_str;
         } else {
             buf_input = try r.readUntilDelimiterOrEof(&buf, '\n');
@@ -98,6 +99,9 @@ pub fn main() !void {
             },
             .disasm_at => |a| {
                 try disasm_block(w, &cpu, a.addr, a.n);
+            },
+            .dump => |a| {
+                try dump(w, &cpu, a.addr, a.n);
             },
             .@"break" => |a| {
                 for (cpu.dbg.breaks.items) |addr| {
@@ -142,6 +146,7 @@ const Cmd = union(enum) {
     info_breaks,
     disasm: struct { n: u32 },
     disasm_at: struct { addr: u32, n: u32 },
+    dump: struct { addr: u32, n: u32 },
     regs,
     help,
     unknown,
@@ -204,6 +209,10 @@ fn parse_input(input: []const u8) !?Cmd {
         const addr = try parse_word(&it);
         const n = try parse_int_or(u32, &it, 10);
         return .{ .disasm_at = .{ .addr = addr, .n = n } };
+    } else if (eql(u8, cmd, "d")) {
+        const addr = try parse_word(&it);
+        const n = try parse_int_or(u32, &it, 16 * 8);
+        return .{ .dump = .{ .addr = addr, .n = n } };
     } else {
         return .unknown;
     }
@@ -235,5 +244,39 @@ fn disasm_block(writer: anytype, cpu: anytype, addr: u32, n: u32) !void {
         const inst_raw = cpu.read(u32, a);
         const inst = decode(inst_raw);
         try print_disasm(writer, a, inst_raw, inst);
+    }
+}
+
+// cpu: *Cpu
+// w: Writer
+fn dump(w: anytype, cpu: anytype, addr: u32, n: u32) !void {
+    var p = addr;
+    while (true) {
+        try w.print("{x:0>8}  ", .{p});
+
+        for (0..16) |col| {
+            try w.print("{x:0>2} ", .{cpu.read(u8, p)});
+            if (col == 7) {
+                try w.print(" ", .{});
+            }
+            p += 1;
+        }
+        p -= 16;
+
+        try w.print("|", .{});
+        for (0..16) |_| {
+            const b = cpu.read(u8, p);
+            if (std.ascii.isPrint(b)) {
+                try w.print("{c}", .{b});
+            } else {
+                try w.print(".", .{});
+            }
+            p += 1;
+        }
+
+        try w.print("|\n", .{});
+        if (p >= addr + n - 1) {
+            break;
+        }
     }
 }
