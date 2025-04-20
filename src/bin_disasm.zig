@@ -4,7 +4,7 @@ const argsParser = @import("args");
 const decoder = @import("decoder.zig");
 const decode = decoder.decode;
 const disasm = @import("disasm.zig");
-const FmtInst = disasm.FmtInst;
+const fmt_inst = disasm.fmt_inst;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -65,7 +65,7 @@ pub fn main() !void {
         const addr = opts_offset + i * 4;
         const v = std.mem.readVarInt(u32, &buf, std.builtin.Endian.little);
         const inst = decode(v);
-        try w.print("{x:0>8}: {x:0>8} {}", .{ addr, v, FmtInst{ .v = inst, .pc = addr } });
+        try w.print("{x:0>8}: {x:0>8} {}", .{ addr, v, fmt_inst(inst, addr) });
         try w.print("\n", .{});
 
         if (@as(u64, i) == opts.num - 1) {

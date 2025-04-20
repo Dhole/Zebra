@@ -10,8 +10,12 @@ const ITypeArgs = root.ITypeArgs;
 const RTypeArgs = root.RTypeArgs;
 const JTypeArgs = root.JTypeArgs;
 
+pub fn fmt_reg(i: u8) FmtReg {
+    return .{ .i = i };
+}
+
 pub const FmtReg = struct {
-    v: u8,
+    i: u8,
     const Self = @This();
 
     pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
@@ -26,7 +30,7 @@ pub const FmtReg = struct {
         // sp: Stak Pointer
         // fp: Frame Pointer
         // ra: Return Address
-        const name = switch (self.v) {
+        const name = switch (self.i) {
             0 => "zr",
             1 => "at",
             2 => "v0",
@@ -62,87 +66,91 @@ pub const FmtReg = struct {
             else => unreachable,
         };
         try writer.print("{s}", .{name});
-        // try writer.print("r{d}", .{self.v});
+        // try writer.print("r{d}", .{self.i});
     }
 };
 
 fn fmt_offset_reg(w: anytype, offset: i16, reg: u8) !void {
     if (offset == 0) {
-        try w.print("({})", .{FmtReg{ .v = reg }});
+        try w.print("({})", .{fmt_reg(reg)});
     } else if (offset > 0) {
-        try w.print("0x{x}({})", .{ offset, FmtReg{ .v = reg } });
+        try w.print("0x{x}({})", .{ offset, fmt_reg(reg) });
     } else {
-        try w.print("-0x{x}({})", .{ -offset, FmtReg{ .v = reg } });
+        try w.print("-0x{x}({})", .{ -offset, fmt_reg(reg) });
     }
 }
 
 fn fmt_i_ld_st_type(w: anytype, op: []const u8, a: ITypeArgs) !void {
-    try w.print("{s} {}, ", .{ op, FmtReg{ .v = a.rt } });
+    try w.print("{s} {}, ", .{ op, fmt_reg(a.rt) });
     try fmt_offset_reg(w, a.imm, a.rs);
 }
 fn fmt_i_type(w: anytype, op: []const u8, a: ITypeArgs) !void {
-    try w.print("{s} {}, {}, 0x{x}", .{ op, FmtReg{ .v = a.rt }, FmtReg{ .v = a.rs }, a.imm });
+    try w.print("{s} {}, {}, 0x{x}", .{ op, fmt_reg(a.rt), fmt_reg(a.rs), a.imm });
 }
 fn fmt_i_signed_type(w: anytype, op: []const u8, a: ITypeArgs) !void {
     if (a.imm >= 0) {
-        try w.print("{s} {}, {}, 0x{x}", .{ op, FmtReg{ .v = a.rt }, FmtReg{ .v = a.rs }, a.imm });
+        try w.print("{s} {}, {}, 0x{x}", .{ op, fmt_reg(a.rt), fmt_reg(a.rs), a.imm });
     } else {
-        try w.print("{s} {}, {}, -0x{x}", .{ op, FmtReg{ .v = a.rt }, FmtReg{ .v = a.rs }, -a.imm });
+        try w.print("{s} {}, {}, -0x{x}", .{ op, fmt_reg(a.rt), fmt_reg(a.rs), -a.imm });
     }
 }
 fn fmt_i_branch_type(w: anytype, op: []const u8, pc: u32, a: ITypeArgs) !void {
     const offset: u32 = @bitCast(@as(i32, a.imm * 4));
     const dst = pc +% 4 +% offset;
-    try w.print("{s} {}, {}, 0x{x}", .{ op, FmtReg{ .v = a.rs }, FmtReg{ .v = a.rt }, dst });
+    try w.print("{s} {}, {}, 0x{x}", .{ op, fmt_reg(a.rs), fmt_reg(a.rt), dst });
 }
 fn fmt_i_rt_imm_type(w: anytype, op: []const u8, a: ITypeArgs) !void {
     const imm: u16 = @bitCast(a.imm);
-    try w.print("{s} {}, 0x{x}", .{ op, FmtReg{ .v = a.rt }, imm });
+    try w.print("{s} {}, 0x{x}", .{ op, fmt_reg(a.rt), imm });
 }
 fn fmt_i_rs_imm_type(w: anytype, op: []const u8, a: ITypeArgs) !void {
-    try w.print("{s} {}, 0x{x}", .{ op, FmtReg{ .v = a.rs }, a.imm });
+    try w.print("{s} {}, 0x{x}", .{ op, fmt_reg(a.rs), a.imm });
 }
 fn fmt_i_rs_imm_signed_type(w: anytype, op: []const u8, a: ITypeArgs) !void {
     if (a.imm >= 0) {
-        try w.print("{s} {}, 0x{x}", .{ op, FmtReg{ .v = a.rs }, a.imm });
+        try w.print("{s} {}, 0x{x}", .{ op, fmt_reg(a.rs), a.imm });
     } else {
-        try w.print("{s} {}, -0x{x}", .{ op, FmtReg{ .v = a.rs }, -a.imm });
+        try w.print("{s} {}, -0x{x}", .{ op, fmt_reg(a.rs), -a.imm });
     }
 }
 fn fmt_i_rs_imm_branch_type(w: anytype, op: []const u8, pc: u32, a: ITypeArgs) !void {
     const offset: u32 = @bitCast(@as(i32, a.imm * 4));
     const dst = pc +% 4 +% offset;
-    try w.print("{s} {}, 0x{x}", .{ op, FmtReg{ .v = a.rs }, dst });
+    try w.print("{s} {}, 0x{x}", .{ op, fmt_reg(a.rs), dst });
 }
 fn fmt_r_type(w: anytype, op: []const u8, a: RTypeArgs) !void {
-    try w.print("{s} {}, {}, {}", .{ op, FmtReg{ .v = a.rd }, FmtReg{ .v = a.rs }, FmtReg{ .v = a.rt } });
+    try w.print("{s} {}, {}, {}", .{ op, fmt_reg(a.rd), fmt_reg(a.rs), fmt_reg(a.rt) });
 }
 fn fmt_r_shift_type(w: anytype, op: []const u8, a: RTypeArgs) !void {
-    try w.print("{s} {}, {}, {}", .{ op, FmtReg{ .v = a.rd }, FmtReg{ .v = a.rt }, FmtReg{ .v = a.rs } });
+    try w.print("{s} {}, {}, {}", .{ op, fmt_reg(a.rd), fmt_reg(a.rt), fmt_reg(a.rs) });
 }
 fn fmt_r_rs_rt_type(w: anytype, op: []const u8, a: RTypeArgs) !void {
-    try w.print("{s} {}, {}", .{ op, FmtReg{ .v = a.rs }, FmtReg{ .v = a.rt } });
+    try w.print("{s} {}, {}", .{ op, fmt_reg(a.rs), fmt_reg(a.rt) });
 }
 fn fmt_r_rd_rt_imm_type(w: anytype, op: []const u8, a: RTypeArgs) !void {
-    try w.print("{s} {}, {}, 0x{x}", .{ op, FmtReg{ .v = a.rd }, FmtReg{ .v = a.rt }, a.imm });
+    try w.print("{s} {}, {}, 0x{x}", .{ op, fmt_reg(a.rd), fmt_reg(a.rt), a.imm });
 }
 fn fmt_j_type(w: anytype, op: []const u8, pc: u32, a: JTypeArgs) !void {
     try w.print("{s} 0x{x}", .{ op, (pc & 0xf0000000) + a.imm * 4 });
 }
 fn fmt_jr(w: anytype, op: []const u8, a: RTypeArgs) !void {
-    try w.print("{s} {}", .{ op, FmtReg{ .v = a.rs } });
+    try w.print("{s} {}", .{ op, fmt_reg(a.rs) });
 }
 fn fmt_jalr(w: anytype, op: []const u8, a: RTypeArgs) !void {
-    try w.print("{s} {}, {}", .{ op, FmtReg{ .v = a.rd }, FmtReg{ .v = a.rs } });
+    try w.print("{s} {}, {}", .{ op, fmt_reg(a.rd), fmt_reg(a.rs) });
+}
+
+pub fn fmt_inst(inst: ?Inst, pc: u32) FmtInst {
+    return .{ .inst = inst, .pc = pc };
 }
 
 pub const FmtInst = struct {
-    v: ?Inst,
+    inst: ?Inst,
     pc: u32,
     const Self = @This();
 
     pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        const inst = self.v orelse {
+        const inst = self.inst orelse {
             try writer.print("???", .{});
             return;
         };
@@ -156,7 +164,7 @@ pub const FmtInst = struct {
             },
             .@"or" => |a| {
                 if (a.rt == 0) {
-                    try writer.print("mov {}, {}", .{ FmtReg{ .v = a.rd }, FmtReg{ .v = a.rs } });
+                    try writer.print("mov {}, {}", .{ fmt_reg(a.rd), fmt_reg(a.rs) });
                     return;
                 }
             },
@@ -248,5 +256,5 @@ pub const FmtInst = struct {
 };
 
 pub fn print_disasm(writer: anytype, pc: u32, inst_raw: u32, inst: ?Inst) !void {
-    writer.print("{x:0>8} : {x:0>8} {}\n", .{ pc, inst_raw, FmtInst{ .v = inst, .pc = pc } }) catch @panic("write");
+    writer.print("{x:0>8} : {x:0>8} {}\n", .{ pc, inst_raw, fmt_inst(inst, pc) }) catch @panic("write");
 }

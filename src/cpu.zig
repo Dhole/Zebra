@@ -12,29 +12,29 @@ const decoder = @import("decoder.zig");
 const decode = decoder.decode;
 
 const disasm = @import("disasm.zig");
-const FmtReg = disasm.FmtReg;
-const FmtInst = disasm.FmtInst;
+const fmt_reg = disasm.fmt_reg;
+const fmt_inst = disasm.fmt_inst;
 const print_disasm = disasm.print_disasm;
 
-const RAM_SIZE: usize = 4 * 512 * 1024; // 2 MiB
-const EXP_REG1_SIZE: usize = 8 * 1024; // 8 KiB
-const SCRATCH_SIZE: usize = 1024; // 1 KiB
-const IO_PORTS_SIZE: usize = 8 * 1024; // 8 KiB
-const EXP_REG2_SIZE: usize = 8 * 1024; // 8 KiB
-const EXP_REG3_SIZE: usize = 2 * 1024 * 1024; // 2 MiB
+pub const RAM_SIZE: usize = 4 * 512 * 1024; // 2 MiB
+pub const EXP_REG1_SIZE: usize = 8 * 1024; // 8 KiB
+pub const SCRATCH_SIZE: usize = 1024; // 1 KiB
+pub const IO_PORTS_SIZE: usize = 8 * 1024; // 8 KiB
+pub const EXP_REG2_SIZE: usize = 8 * 1024; // 8 KiB
+pub const EXP_REG3_SIZE: usize = 2 * 1024 * 1024; // 2 MiB
 pub const BIOS_SIZE: usize = 512 * 1024; // 512 KiB
-const CACHECTL_SIZE: usize = 512; // 0.5 KiB
-const ADDR_KUSEG: u32 = 0x0000_0000;
-const ADDR_KSEG0: u32 = 0x8000_0000;
-const ADDR_KSEG1: u32 = 0xa000_0000;
-const ADDR_KSEG2: u32 = 0xfffe_0000;
-const ADDR_RESET: u32 = ADDR_BIOS;
-const ADDR_EXP_REG1: u32 = 0x1f00_0000;
-const ADDR_SCRATCH: u32 = 0x1f80_0000;
-const ADDR_IO_PORTS: u32 = 0x1f80_1000;
-const ADDR_EXP_REG2: u32 = 0x1f80_2000;
-const ADDR_EXP_REG3: u32 = 0x1fa0_0000;
-const ADDR_BIOS: u32 = 0xbfc0_0000;
+pub const CACHECTL_SIZE: usize = 512; // 0.5 KiB
+pub const ADDR_KUSEG: u32 = 0x0000_0000;
+pub const ADDR_KSEG0: u32 = 0x8000_0000;
+pub const ADDR_KSEG1: u32 = 0xa000_0000;
+pub const ADDR_KSEG2: u32 = 0xfffe_0000;
+pub const ADDR_RESET: u32 = ADDR_BIOS;
+pub const ADDR_EXP_REG1: u32 = 0x1f00_0000;
+pub const ADDR_SCRATCH: u32 = 0x1f80_0000;
+pub const ADDR_IO_PORTS: u32 = 0x1f80_1000;
+pub const ADDR_EXP_REG2: u32 = 0x1f80_2000;
+pub const ADDR_EXP_REG3: u32 = 0x1fa0_0000;
+pub const ADDR_BIOS: u32 = 0xbfc0_0000;
 
 fn buf_read(comptime T: type, buf: []const u8, addr: u32) T {
     return switch (T) {
@@ -91,7 +91,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         dbg_w: dbg_writer_type,
         comptime cfg: Cfg = cfg,
         dbg: Dbg,
-        r: [32]u32, // Registers
+        regs: [32]u32, // Registers
         pc: u32, // Program Counter
         hi: u32, // Multiplication 64 bit high result or division remainder
         lo: u32, // Multiplication 64 bit low result or division quotient
@@ -117,7 +117,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .dbg_w = dbg_writer,
                 .cfg = cfg,
                 .dbg = Dbg.init(allocator),
-                .r = [_]u32{0} ** 32,
+                .regs = [_]u32{0} ** 32,
                 .pc = ADDR_RESET,
                 .lo = 0,
                 .hi = 0,
@@ -134,6 +134,15 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             self.dbg.deinit();
         }
 
+        pub fn r(self: *const Self, i: usize) u32 {
+            return self.regs[i];
+        }
+
+        pub fn set_r(self: *Self, i: usize, v: u32) void {
+            self.regs[i] = v;
+            self.regs[0] = 0;
+        }
+
         pub fn format_regs(self: *const Self, writer: anytype) !void {
             for (0..8) |row| {
                 for (0..5) |column| {
@@ -145,8 +154,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                             else => try writer.print("            ", .{}),
                         }
                     } else {
-                        const v: u8 = @intCast((column - 1) * 8 + row);
-                        try writer.print("   {d:0>2} {}: {x:0>8}", .{ v, FmtReg{ .v = v }, self.r[v] });
+                        const i: u8 = @intCast((column - 1) * 8 + row);
+                        try writer.print("   {d:0>2} {}: {x:0>8}", .{ i, fmt_reg(i), self.r(i) });
                     }
                 }
                 try writer.print("\n", .{});
@@ -189,37 +198,32 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 }
             }
             self.exec(inst);
-            // TODO: Repace this by either writing always 0 to r0 after ever
-            // reg write, or filtering instructions that write to r0
-            if (self.r[0] != 0) {
-                @panic("zero != 0");
-            }
         }
 
-        fn exec(self: *Self, inst: Inst) void {
+        pub fn exec(self: *Self, inst: Inst) void {
             switch (inst) {
                 .lui => |a| {
                     const imm: u16 = @bitCast(a.imm);
-                    self.r[a.rt] = @as(u32, imm) << 16;
+                    self.set_r(a.rt, @as(u32, imm) << 16);
                     self.pc +%= 4;
                 },
                 .ori => |a| {
                     const imm: u16 = @bitCast(a.imm);
-                    self.r[a.rt] = self.r[a.rs] | @as(u32, imm);
+                    self.set_r(a.rt, self.r(a.rs) | @as(u32, imm));
                     self.pc +%= 4;
                 },
                 .sw => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
-                    self.write(u32, self.r[a.rs] +% offset, self.r[a.rt]);
+                    self.write(u32, self.r(a.rs) +% offset, self.r(a.rt));
                     self.pc +%= 4;
                 },
                 .sll => |a| {
-                    self.r[a.rd] = self.r[a.rt] << @intCast(a.imm);
+                    self.set_r(a.rd, self.r(a.rt) << @intCast(a.imm));
                     self.pc +%= 4;
                 },
                 .addiu => |a| {
                     const imm: u32 = @bitCast(@as(i32, a.imm));
-                    self.r[a.rt] = self.r[a.rs] +% imm;
+                    self.set_r(a.rt, self.r(a.rs) +% imm);
                     self.pc +%= 4;
                 },
                 .j => |a| {
@@ -231,68 +235,68 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 },
                 .jal => |a| {
                     const new_pc = (self.pc & 0xf0000000) + a.imm * 4;
-                    self.r[31] = self.pc + 8;
+                    self.set_r(31, self.pc + 8);
                     self.pc +%= 4;
                     // Execute instruction in the branch delay slot
                     self.step();
                     self.pc = new_pc;
                 },
                 .@"or" => |a| {
-                    self.r[a.rd] = self.r[a.rs] | self.r[a.rt];
+                    self.set_r(a.rd, self.r(a.rs) | self.r(a.rt));
                     self.pc +%= 4;
                 },
                 .cfc0 => |a| {
                     // TODO
-                    // self.r[a.rt] = self.cop0.ctl_reg[a.rd]
+                    // self.set_r(a.rt, self.cop0.ctl_reg[a.rd])
                     _ = a;
                     self.pc +%= 4;
                 },
                 .bne => |a| {
-                    self.branch_cmp(self.r[a.rs] != self.r[a.rt], a.imm);
+                    self.branch_cmp(self.r(a.rs) != self.r(a.rt), a.imm);
                 },
                 .beq => |a| {
-                    self.branch_cmp(self.r[a.rs] == self.r[a.rt], a.imm);
+                    self.branch_cmp(self.r(a.rs) == self.r(a.rt), a.imm);
                 },
                 .addi => |a| {
                     // TODO: overflow trap
                     const imm: u32 = @bitCast(@as(i32, a.imm));
-                    self.r[a.rt] = self.r[a.rs] +% imm;
+                    self.set_r(a.rt, self.r(a.rs) +% imm);
                     self.pc +%= 4;
                 },
                 .lw => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
-                    self.r[a.rt] = self.read(u32, self.r[a.rs] +% offset);
+                    self.set_r(a.rt, self.read(u32, self.r(a.rs) +% offset));
                     self.pc +%= 4;
                 },
                 .sltu => |a| {
-                    if (self.r[a.rs] < self.r[a.rt]) {
-                        self.r[a.rd] = 1;
+                    if (self.r(a.rs) < self.r(a.rt)) {
+                        self.set_r(a.rd, 1);
                     } else {
-                        self.r[a.rd] = 0;
+                        self.set_r(a.rd, 0);
                     }
                     self.pc +%= 4;
                 },
                 .addu => |a| {
-                    self.r[a.rd] = self.r[a.rs] +% self.r[a.rt];
+                    self.set_r(a.rd, self.r(a.rs) +% self.r(a.rt));
                     self.pc +%= 4;
                 },
                 .sh => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
-                    self.write(u16, self.r[a.rs] +% offset, @intCast(self.r[a.rt] & 0xffff));
+                    self.write(u16, self.r(a.rs) +% offset, @intCast(self.r(a.rt) & 0xffff));
                     self.pc +%= 4;
                 },
                 .andi => |a| {
                     const imm: u16 = @bitCast(a.imm);
-                    self.r[a.rt] = self.r[a.rs] & @as(u32, imm);
+                    self.set_r(a.rt, self.r(a.rs) & @as(u32, imm));
                     self.pc +%= 4;
                 },
                 .sb => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
-                    self.write(u8, self.r[a.rs] +% offset, @intCast(self.r[a.rt] & 0xff));
+                    self.write(u8, self.r(a.rs) +% offset, @intCast(self.r(a.rt) & 0xff));
                     self.pc +%= 4;
                 },
                 .jr => |a| {
-                    const new_pc = self.r[a.rs];
+                    const new_pc = self.r(a.rs);
                     self.pc +%= 4;
                     // Execute instruction in the branch delay slot
                     self.step();
@@ -300,7 +304,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 },
                 .lb => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
-                    self.r[a.rt] = @as(u32, self.read(u8, self.r[a.rs] +% offset));
+                    self.set_r(a.rt, @as(u32, self.read(u8, self.r(a.rs) +% offset)));
                     self.pc +%= 4;
                 },
                 .mfc0 => |a| {
@@ -309,12 +313,12 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     // TODO
                 },
                 .@"and" => |a| {
-                    self.r[a.rd] = self.r[a.rs] & self.r[a.rt];
+                    self.set_r(a.rd, self.r(a.rs) & self.r(a.rt));
                     self.pc +%= 4;
                 },
                 .add => |a| {
                     // TODO: overflow trap
-                    self.r[a.rd] = self.r[a.rs] +% self.r[a.rt];
+                    self.set_r(a.rd, self.r(a.rs) +% self.r(a.rt));
                     self.pc +%= 4;
                 },
                 .bc0f => |a| {
@@ -417,8 +421,27 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         fn io_regs_write(self: *Self, comptime T: type, addr: u32, v: T) void {
             _ = self;
             switch (T) {
-                u8 => std.debug.print("TODO: io_regs_write addr {x:0>8} value {x:0>2}\n", .{ addr, v }),
-                u16 => std.debug.print("TODO: io_regs_write addr {x:0>8} value {x:0>4}\n", .{ addr, v }),
+                u8 => switch (addr) {
+                    DTL_H2000_PSX_POST => {
+                        std.debug.print("TODO: io_regs_write u8 DTL_H2000_PSX_POST value {x:0>8}\n", .{v});
+                    },
+                    else => std.debug.print("TODO: io_regs_write u8 addr {x:0>8} value {x:0>2}\n", .{ addr, v }),
+                },
+                u16 => switch (addr) {
+                    MAIN_VOL_LR_ADDR => {
+                        std.debug.print("TODO: io_regs_write u16 MAIN_VOL_LR_ADDR value {x:0>8}\n", .{v});
+                    },
+                    MAIN_VOL_LR_ADDR + 2 => {
+                        std.debug.print("TODO: io_regs_write u16 MAIN_VOL_LR_ADDR+2 value {x:0>8}\n", .{v});
+                    },
+                    REV_VOL_LR_ADDR => {
+                        std.debug.print("TODO: io_regs_write u16 REV_VOL_LR_ADDR value {x:0>8}\n", .{v});
+                    },
+                    REV_VOL_LR_ADDR + 2 => {
+                        std.debug.print("TODO: io_regs_write u16 REV_VOL_LR_ADDR+2 value {x:0>8}\n", .{v});
+                    },
+                    else => std.debug.print("TODO: io_regs_write u16 addr {x:0>8} value {x:0>4}\n", .{ addr, v }),
+                },
                 u32 => switch (addr) {
                     EXP1_BASE_ADDR => {
                         if (v != 0x1f000000) {
@@ -430,7 +453,34 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                             std.debug.panic("Bad expansion 1 base address: {x:0>8}", .{v});
                         }
                     },
-                    else => std.debug.print("TODO: io_regs_write addr {x:0>8} value {x:0>8}\n", .{ addr, v }),
+                    EXP1_DELAY_ADDR => {
+                        std.debug.print("TODO: io_regs_write u32 EXP1_DELAY_ADDR value {x:0>8}\n", .{v});
+                    },
+                    EXP3_DELAY_ADDR => {
+                        std.debug.print("TODO: io_regs_write u32 EXP3_DELAY_ADDR value {x:0>8}\n", .{v});
+                    },
+                    BIOS_ROM_ADDR => {
+                        std.debug.print("TODO: io_regs_write u32 BIOS_ROM_ADDR value {x:0>8}\n", .{v});
+                    },
+                    SPU_DELAY_ADDR => {
+                        std.debug.print("TODO: io_regs_write u32 SPU_DELAY_ADDR value {x:0>8}\n", .{v});
+                    },
+                    CDROM_DELAY_ADDR => {
+                        std.debug.print("TODO: io_regs_write u32 CDROM_DELAY_ADDR value {x:0>8}\n", .{v});
+                    },
+                    EXP2_DELAY_ADDR => {
+                        std.debug.print("TODO: io_regs_write u32 EXP2_DELAY_ADDR value {x:0>8}\n", .{v});
+                    },
+                    COM_DELAY_ADDR => {
+                        std.debug.print("TODO: io_regs_write u32 COM_DELAY_ADDR value {x:0>8}\n", .{v});
+                    },
+                    RAM_SIZE_ADDR => {
+                        std.debug.print("TODO: io_regs_write u32 RAM_SIZE_ADDR value {x:0>8}\n", .{v});
+                    },
+                    MAIN_VOL_LR_ADDR => {
+                        std.debug.print("TODO: io_regs_write u32 MAIN_VOL_LR_ADDR value {x:0>8}\n", .{v});
+                    },
+                    else => std.debug.print("TODO: io_regs_write u32 addr {x:0>8} value {x:0>8}\n", .{ addr, v }),
                 },
                 else => @compileError("invalid T"),
             }
@@ -444,15 +494,15 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
 
 // Memory Control 1
 
-const EXP1_BASE_ADDR: u32 = 0x000; // Expansion 1 Base Address (usually 1F000000h)
-const EXP2_BASE_ADDR: u32 = 0x004; // Expansion 2 Base Address (usually 1F802000h)
-//   1F801008h 4    Expansion 1 Delay/Size (usually 0013243Fh; 512Kbytes 8bit-bus)
-//   1F80100Ch 4    Expansion 3 Delay/Size (usually 00003022h; 1 byte)
-//   1F801010h 4    BIOS ROM    Delay/Size (usually 0013243Fh; 512Kbytes 8bit-bus)
-//   1F801014h 4    SPU_DELAY   Delay/Size (usually 200931E1h)
-//   1F801018h 4    CDROM_DELAY Delay/Size (usually 00020843h or 00020943h)
-//   1F80101Ch 4    Expansion 2 Delay/Size (usually 00070777h; 128-bytes 8bit-bus)
-//   1F801020h 4    COM_DELAY / COMMON_DELAY (00031125h or 0000132Ch or 00001325h)
+const EXP1_BASE_ADDR: u32 = 0x0000; // 4 Expansion 1 Base Address (usually 1F000000h)
+const EXP2_BASE_ADDR: u32 = 0x0004; // 4 Expansion 2 Base Address (usually 1F802000h)
+const EXP1_DELAY_ADDR: u32 = 0x0008; // 4 Expansion 1 Delay/Size (usually 0013243Fh; 512Kbytes 8bit-bus)
+const EXP3_DELAY_ADDR: u32 = 0x000c; // 4 Expansion 3 Delay/Size (usually 00003022h; 1 byte)
+const BIOS_ROM_ADDR: u32 = 0x0010; // 4 BIOS ROM Delay/Size (usually 0013243Fh; 512Kbytes 8bit-bus)
+const SPU_DELAY_ADDR: u32 = 0x0014; // 4 SPU_DELAY Delay/Size (usually 200931E1h)
+const CDROM_DELAY_ADDR: u32 = 0x0018; // 4 CDROM_DELAY Delay/Size (usually 00020843h or 00020943h)
+const EXP2_DELAY_ADDR: u32 = 0x001c; // 4 Expansion 2 Delay/Size (usually 00070777h; 128-bytes 8bit-bus)
+const COM_DELAY_ADDR: u32 = 0x0020; // 4 COM_DELAY / COMMON_DELAY (00031125h or 0000132Ch or 00001325h)
 
 // Peripheral I/O Ports
 
@@ -470,7 +520,7 @@ const EXP2_BASE_ADDR: u32 = 0x004; // Expansion 2 Base Address (usually 1F802000
 
 // Memory Control 2
 
-//   1F801060h 4/2  RAM_SIZE (usually 00000B88h; 2MB RAM mirrored in first 8MB)
+const RAM_SIZE_ADDR: u32 = 0x0060; // 4/2 RAM_SIZE (usually 00000B88h; 2MB RAM mirrored in first 8MB)
 
 // Interrupt Control
 
@@ -550,8 +600,8 @@ const EXP2_BASE_ADDR: u32 = 0x004; // Expansion 2 Base Address (usually 1F802000
 
 // SPU Control Registers
 
-//   1F801D80h 4  Main Volume Left/Right
-//   1F801D84h 4  Reverb Output Volume Left/Right
+const MAIN_VOL_LR_ADDR: u32 = 0x0d80; // 4 Main Volume Left/Right
+const REV_VOL_LR_ADDR: u32 = 0x0d84; // 4 Reverb Output Volume Left/Right
 //   1F801D88h 4  Voice 0..23 Key ON (Start Attack/Decay/Sustain) (W)
 //   1F801D8Ch 4  Voice 0..23 Key OFF (Start Release) (W)
 //   1F801D90h 4  Voice 0..23 Channel FM (pitch lfo) mode (R/W)
@@ -646,8 +696,8 @@ const EXP2_BASE_ADDR: u32 = 0x004; // Expansion 2 Base Address (usually 1F802000
 //   1F802004h 2 DTL-H2000: Whatever 16bit data ?
 //   1F802030h 1/4 DTL-H2000: Secondary IRQ10 Flags
 //   1F802032h 1 DTL-H2000: Whatever IRQ Control ?
-//   1F802040h 1 DTL-H2000: Bootmode "Dip switches" (R)
-//   1F802041h 1 PSX: POST (external 7 segment display, indicate BIOS boot status)
+const DTL_H2000_BOOTMODE_ADDR: u32 = 0x1040; // 1 DTL-H2000: Bootmode "Dip switches" (R)
+const DTL_H2000_PSX_POST: u32 = 0x1041; // 1 PSX: POST (external 7 segment display, indicate BIOS boot status)
 //   1F802042h 1 DTL-H2000: POST/LED (similar to POST) (other addr, 2-digit wide)   1F802070h 1 PS2: POST2 (similar to POST, but PS2 BIOS uses this address)
 
 // Expansion Region 2 - Nocash Emulation Expansion

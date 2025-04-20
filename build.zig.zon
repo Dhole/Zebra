@@ -6,11 +6,12 @@
     //
     // It is redundant to include "zig" in this name because it is already
     // within the Zig package namespace.
-    .name = "zebra",
+    .name = .zebra,
 
     // This is a [Semantic Version](https://semver.org/).
     // In a future version of Zig it will be used for package deduplication.
     .version = "0.0.0",
+    .fingerprint = 0x15575db69a1bc4cc,
 
     // This field is optional.
     // This is currently advisory only; Zig does not yet do anything
@@ -24,8 +25,8 @@
     // internet connectivity.
     .dependencies = .{
         .args = .{
-            .url = "git+https://github.com/ikskuh/zig-args?ref=zig-0.13.x#1df15086e5d1b245acedadbec03440bb37871e5e",
-            .hash = "1220904d2fdcd970dd0d216211d092eb3ef6da01117163cc9393ab845a1d66c029d9",
+            .url = "git+https://github.com/ikskuh/zig-args?ref=master#9425b94c103a031777fdd272c555ce93a7dea581",
+            .hash = "args-0.0.0-CiLiqv_NAAC97fGpk9hS2K681jkiqPsWP6w3ucb_ctGH",
         },
     },
     .paths = .{
