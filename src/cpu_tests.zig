@@ -22,11 +22,11 @@ fn cpu_init() !Cpu(@TypeOf(w), cfg) {
     return cpu;
 }
 
-test "op_lui" {
+test "op_lui_" {
     // TODO
 }
 
-test "op_ori" {
+test "op_ori_" {
     var cpu = try cpu_init();
     defer cpu.deinit();
 
@@ -43,7 +43,7 @@ test "op_ori" {
     try expectEqual(0xffff_ffff, cpu.r(1));
 }
 
-test "op_sw" {
+test "op_sw_" {
     var cpu = try cpu_init();
     defer cpu.deinit();
 
@@ -58,7 +58,7 @@ test "op_sw" {
     try expectEqual(0x8765_4321, cpu.read(u32, ADDR_KUSEG + 16 - 4));
 }
 
-test "op_sll" {
+test "op_sll_" {
     var cpu = try cpu_init();
     defer cpu.deinit();
 
@@ -71,7 +71,7 @@ test "op_sll" {
     try expectEqual(0x111f_fff0, cpu.r(1));
 }
 
-test "op_addiu" {
+test "op_addiu_" {
     var cpu = try cpu_init();
     defer cpu.deinit();
 
@@ -84,51 +84,104 @@ test "op_addiu" {
     try expectEqual(0x000f_0fff, cpu.r(1));
 }
 
-test "op_j" {
+test "op_j_" {
+    var cpu = try cpu_init();
+    defer cpu.deinit();
+
+    cpu.pc = 0x0000_1234;
+    cpu.write(u32, cpu.pc + 4, 0x0000_0000); // nop at the branch delay slot
+    cpu.exec(.{ .j = .{ .imm = 0x0000_1000 } });
+    try expectEqual(0x0000_4000, cpu.pc);
+
+    cpu.pc = 0x0000_1234;
+    cpu.write(u32, cpu.pc + 4, 0x24080b88); // `addiu r8, r0, 0xb88` at the branch delay slot
+    cpu.exec(.{ .j = .{ .imm = 0x0000_1000 } });
+    try expectEqual(0x0000_4000, cpu.pc);
+    try expectEqual(0xb88, cpu.r(8));
+}
+
+test "op_jal_" {
     // TODO
 }
 
-test "op_jal" {
+test "op_or_" {
+    var cpu = try cpu_init();
+    defer cpu.deinit();
+
+    cpu.set_r(2, 0x0000_ffff);
+    cpu.set_r(3, 0x0000_0000);
+    cpu.exec(.{ .@"or" = .{ .rd = 1, .rs = 2, .rt = 3, .imm = 0 } });
+    try expectEqual(0x0000_ffff, cpu.r(1));
+
+    cpu.set_r(2, 0x0000_0000);
+    cpu.set_r(3, 0x0000_ffff);
+    cpu.exec(.{ .@"or" = .{ .rd = 1, .rs = 2, .rt = 3, .imm = 0 } });
+    try expectEqual(0x0000_ffff, cpu.r(1));
+
+    cpu.set_r(2, 0xffff_0000);
+    cpu.set_r(3, 0x0000_ffff);
+    cpu.exec(.{ .@"or" = .{ .rd = 1, .rs = 2, .rt = 3, .imm = 0 } });
+    try expectEqual(0xffff_ffff, cpu.r(1));
+}
+
+test "op_cfc0_" {
     // TODO
 }
 
-test "op_or" {
+test "op_bne_" {
     // TODO
 }
 
-test "op_cfc0" {
+test "op_beq_" {
     // TODO
 }
 
-test "op_bne" {
+test "op_addi_" {
     // TODO
 }
 
-test "op_beq" {
+test "op_lw_" {
+    var cpu = try cpu_init();
+    defer cpu.deinit();
+
+    cpu.write(u32, 0x50, 0x1234_5678);
+
+    cpu.pc = 0;
+    cpu.set_r(2, 0x40);
+    cpu.write(u32, cpu.pc + 4, 0x0000_0000); // nop at the branch delay slot
+    cpu.exec(.{ .lw = .{ .rt = 1, .rs = 2, .imm = 0x10 } });
+    try expectEqual(0x1234_5678, cpu.r(1));
+
+    cpu.pc = 0;
+    cpu.set_r(2, 0x40);
+    cpu.write(u32, cpu.pc + 4, 0x24880b88); // `addiu r8, r4, 0xb88` at the load delay slot
+    cpu.exec(.{ .lw = .{ .rt = 4, .rs = 2, .imm = 0x10 } });
+    // The delay slot instruction reads r4 before the load writes to it (so it
+    // reads v=0 instead of v=1234_5678)
+    try expectEqual(0x1234_5678, cpu.r(4));
+    try expectEqual(0xb88, cpu.r(8));
+
+    cpu.pc = 0;
+    cpu.set_r(2, 0x40);
+    cpu.write(u32, cpu.pc + 4, 0x24080b88); // `addiu r8, r0, 0xb88` at the load delay slot
+    cpu.exec(.{ .lw = .{ .rt = 8, .rs = 2, .imm = 0x10 } });
+    // The dest register is overwritten by the load delay slot instruction
+    try expectEqual(0xb88, cpu.r(8));
+}
+
+test "op_sltu_" {
     // TODO
 }
 
-test "op_addi" {
+test "op_addu_" {
     // TODO
 }
 
-test "op_lw" {
+test "op_sh_" {
     // TODO
 }
 
-test "op_sltu" {
-    // TODO
-}
-
-test "op_addu" {
-    // TODO
-}
-
-test "op_sh" {
-    // TODO
-}
-
-test "op_andi" {
+test "op_andi_" {
     var cpu = try cpu_init();
     defer cpu.deinit();
 
@@ -145,30 +198,30 @@ test "op_andi" {
     try expectEqual(0x0000_ffff, cpu.r(1));
 }
 
-test "op_sb" {
+test "op_sb_" {
     // TODO
 }
 
-test "op_jr" {
+test "op_jr_" {
     // TODO
 }
 
-test "op_lb" {
+test "op_lb_" {
     // TODO
 }
 
-test "op_mfc0" {
+test "op_mfc0_" {
     // TODO
 }
 
-test "op_and" {
+test "op_and_" {
     // TODO
 }
 
-test "op_add" {
+test "op_add_" {
     // TODO
 }
 
-test "op_bc0f" {
+test "op_bc0f_" {
     // TODO
 }

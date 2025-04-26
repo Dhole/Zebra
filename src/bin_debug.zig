@@ -88,7 +88,7 @@ pub fn main() !void {
             },
             .step => |a| {
                 for (0..a.n) |_| {
-                    cpu.step();
+                    _ = cpu.step();
                 }
             },
             .@"continue" => {

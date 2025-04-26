@@ -86,12 +86,51 @@ const Dbg = struct {
     }
 };
 
+const COP0_SR_ISC = 16; // Isolate Cache (0=No, 1=Isolate)
+
+const Cop0 = struct {
+    // COP0 Register Summary
+    //   cop0r0-r2   - N/A
+    //   cop0r3      - BPC - Breakpoint on execute (R/W)
+    //   cop0r4      - N/A
+    //   cop0r5      - BDA - Breakpoint on data access (R/W)
+    //   cop0r6      - JUMPDEST - Randomly memorized jump address (R)
+    //   cop0r7      - DCIC - Breakpoint control (R/W)
+    //   cop0r8      - BadVaddr - Bad Virtual Address (R)
+    //   cop0r9      - BDAM - Data Access breakpoint mask (R/W)
+    //   cop0r10     - N/A
+    //   cop0r11     - BPCM - Execute breakpoint mask (R/W)
+    //   cop0r12     - SR - System status register (R/W)
+    //   cop0r13     - CAUSE - (R)  Describes the most recently recognised exception
+    //   cop0r14     - EPC - Return Address from Trap (R)
+    //   cop0r15     - PRID - Processor ID (R)
+    //   cop0r16-r31 - Garbage
+    //   cop0r32-r63 - N/A - None such (Control regs)
+    status_reg: u32, // SR
+
+    const Self = @This();
+
+    fn init() Self {
+        return Self{
+            .status_reg = 0,
+        };
+    }
+
+    fn set_r(self: *Self, i: usize, v: u32) void {
+        switch (i) {
+            12 => self.status_reg = v,
+            else => std.debug.panic("TODO: cop0 set_r {} {x:0>8}", .{ i, v }),
+        }
+    }
+};
+
 pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
     return struct {
         dbg_w: dbg_writer_type,
         comptime cfg: Cfg = cfg,
         dbg: Dbg,
         regs: [32]u32, // Registers
+        cop0: Cop0,
         pc: u32, // Program Counter
         hi: u32, // Multiplication 64 bit high result or division remainder
         lo: u32, // Multiplication 64 bit low result or division quotient
@@ -118,6 +157,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .cfg = cfg,
                 .dbg = Dbg.init(allocator),
                 .regs = [_]u32{0} ** 32,
+                .cop0 = Cop0.init(),
                 .pc = ADDR_RESET,
                 .lo = 0,
                 .hi = 0,
@@ -181,6 +221,11 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         }
 
         pub fn step(self: *Self) void {
+            _ = self._step();
+        }
+
+        // step and return the reg that has been written by the operation
+        fn _step(self: *Self) struct { u8, u32 } {
             // Fetch next instruction
             const inst_raw = self.read(u32, self.pc);
             const inst = decode(inst_raw) orelse std.debug.panic("TODO: unknown inst {x:0>8}", .{inst_raw});
@@ -192,42 +237,141 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     for (self.dbg.breaks.items) |addr| {
                         if (addr == self.pc) {
                             self.dbg._break = true;
-                            return;
+                            return .{ 0, 0 };
                         }
                     }
                 }
             }
-            self.exec(inst);
+            const dst_r, const dst_v = self.exec_no_write_regs(inst);
+            self.set_r(dst_r, dst_v);
+            return .{ dst_r, dst_v };
         }
 
         pub fn exec(self: *Self, inst: Inst) void {
+            const dst_r, const dst_v = self.exec_no_write_regs(inst);
+            self.set_r(dst_r, dst_v);
+        }
+
+        // execute instruction and return the reg that needs to been written by the operation
+        pub fn exec_no_write_regs(self: *Self, inst: Inst) struct { u8, u32 } {
+            var dst_r: u8 = 0;
+            var dst_v: u32 = 0;
             switch (inst) {
+                // ALU
                 .lui => |a| {
                     const imm: u16 = @bitCast(a.imm);
-                    self.set_r(a.rt, @as(u32, imm) << 16);
+                    dst_r = a.rt;
+                    dst_v = @as(u32, imm) << 16;
+                    self.pc +%= 4;
+                },
+                .addu => |a| {
+                    dst_r = a.rd;
+                    dst_v = self.r(a.rs) +% self.r(a.rt);
+                    self.pc +%= 4;
+                },
+                .add => |a| {
+                    const lhs: i32 = @bitCast(self.r(a.rs));
+                    const rhs: i32 = @bitCast(self.r(a.rt));
+                    const res, const ov = @addWithOverflow(lhs, rhs);
+                    if (ov == 1) {
+                        std.debug.panic("TODO: add overflow trap", .{});
+                    }
+                    dst_r = a.rt;
+                    dst_v = @bitCast(res);
+                    self.pc +%= 4;
+                },
+                .addiu => |a| {
+                    const imm: u32 = @bitCast(@as(i32, a.imm));
+                    dst_r = a.rt;
+                    dst_v = self.r(a.rs) +% imm;
+                    self.pc +%= 4;
+                },
+                .addi => |a| {
+                    const lhs: i32 = @bitCast(self.r(a.rs));
+                    const res, const ov = @addWithOverflow(lhs, @as(i32, a.imm));
+                    if (ov == 1) {
+                        std.debug.panic("TODO: addi overflow trap", .{});
+                    }
+                    dst_r = a.rt;
+                    dst_v = @bitCast(res);
+                    self.pc +%= 4;
+                },
+                .sltu => |a| {
+                    dst_r = a.rd;
+                    dst_v = if (self.r(a.rs) < self.r(a.rt)) 1 else 0;
+                    self.pc +%= 4;
+                },
+                .@"and" => |a| {
+                    dst_r = a.rd;
+                    dst_v = self.r(a.rs) & self.r(a.rt);
+                    self.pc +%= 4;
+                },
+                .andi => |a| {
+                    const imm: u16 = @bitCast(a.imm);
+                    dst_r = a.rt;
+                    dst_v = self.r(a.rs) & @as(u32, imm);
+                    self.pc +%= 4;
+                },
+                .@"or" => |a| {
+                    dst_r = a.rd;
+                    dst_v = self.r(a.rs) | self.r(a.rt);
                     self.pc +%= 4;
                 },
                 .ori => |a| {
                     const imm: u16 = @bitCast(a.imm);
-                    self.set_r(a.rt, self.r(a.rs) | @as(u32, imm));
+                    dst_r = a.rt;
+                    dst_v = self.r(a.rs) | @as(u32, imm);
                     self.pc +%= 4;
+                },
+                .sll => |a| {
+                    dst_r = a.rd;
+                    dst_v = self.r(a.rt) << @intCast(a.imm);
+                    self.pc +%= 4;
+                },
+                // Load & Store
+                .lw => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    const v_lw = self.read(u32, self.r(a.rs) +% offset);
+                    self.pc +%= 4;
+                    // Execute instruction in the load delay slot
+                    const delay_dst_r, const delay_dst_v = self._step();
+                    self.set_r(a.rt, v_lw);
+                    self.set_r(delay_dst_r, delay_dst_v);
+                },
+                .lb => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    const v_lw = @as(u32, self.read(u8, self.r(a.rs) +% offset));
+                    self.pc +%= 4;
+                    // Execute instruction in the load delay slot
+                    const delay_dst_r, const delay_dst_v = self._step();
+                    self.set_r(a.rt, v_lw);
+                    self.set_r(delay_dst_r, delay_dst_v);
                 },
                 .sw => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
                     self.write(u32, self.r(a.rs) +% offset, self.r(a.rt));
                     self.pc +%= 4;
                 },
-                .sll => |a| {
-                    self.set_r(a.rd, self.r(a.rt) << @intCast(a.imm));
+                .sh => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    self.write(u16, self.r(a.rs) +% offset, @intCast(self.r(a.rt) & 0xffff));
                     self.pc +%= 4;
                 },
-                .addiu => |a| {
-                    const imm: u32 = @bitCast(@as(i32, a.imm));
-                    self.set_r(a.rt, self.r(a.rs) +% imm);
+                .sb => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    self.write(u8, self.r(a.rs) +% offset, @intCast(self.r(a.rt) & 0xff));
                     self.pc +%= 4;
                 },
+                // Jump & Branch
                 .j => |a| {
                     const new_pc = (self.pc & 0xf0000000) + a.imm * 4;
+                    self.pc +%= 4;
+                    // Execute instruction in the branch delay slot
+                    _ = self.step();
+                    self.pc = new_pc;
+                },
+                .jr => |a| {
+                    const new_pc = self.r(a.rs);
                     self.pc +%= 4;
                     // Execute instruction in the branch delay slot
                     self.step();
@@ -238,18 +382,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     self.set_r(31, self.pc + 8);
                     self.pc +%= 4;
                     // Execute instruction in the branch delay slot
-                    self.step();
+                    _ = self.step();
                     self.pc = new_pc;
-                },
-                .@"or" => |a| {
-                    self.set_r(a.rd, self.r(a.rs) | self.r(a.rt));
-                    self.pc +%= 4;
-                },
-                .cfc0 => |a| {
-                    // TODO
-                    // self.set_r(a.rt, self.cop0.ctl_reg[a.rd])
-                    _ = a;
-                    self.pc +%= 4;
                 },
                 .bne => |a| {
                     self.branch_cmp(self.r(a.rs) != self.r(a.rt), a.imm);
@@ -257,69 +391,27 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .beq => |a| {
                     self.branch_cmp(self.r(a.rs) == self.r(a.rt), a.imm);
                 },
-                .addi => |a| {
-                    // TODO: overflow trap
-                    const imm: u32 = @bitCast(@as(i32, a.imm));
-                    self.set_r(a.rt, self.r(a.rs) +% imm);
-                    self.pc +%= 4;
-                },
-                .lw => |a| {
-                    const offset: u32 = @bitCast(@as(i32, a.imm));
-                    self.set_r(a.rt, self.read(u32, self.r(a.rs) +% offset));
-                    self.pc +%= 4;
-                },
-                .sltu => |a| {
-                    if (self.r(a.rs) < self.r(a.rt)) {
-                        self.set_r(a.rd, 1);
-                    } else {
-                        self.set_r(a.rd, 0);
+                // Other
+                .mtc0 => |a| {
+                    if (a.imm != 0) {
+                        std.debug.panic("TODO: mtc with sel={} at pc={x:0>8}", .{ a.imm, self.pc });
                     }
-                    self.pc +%= 4;
+                    switch (a.rt) {
+                        12 => self.cop0.set_r(a.rt, self.r(a.rd)),
+                        else => std.debug.print("TODO: pc={x:0>8} mtc0 r{}, r{}, {}\n", .{ self.pc, a.rt, a.rd, a.imm }),
+                    }
+                    // TODO
+                    // self.set_r(a.rt, self.cop0.ctl_reg[a.rd]) self.pc +%= 4;
                 },
-                .addu => |a| {
-                    self.set_r(a.rd, self.r(a.rs) +% self.r(a.rt));
-                    self.pc +%= 4;
-                },
-                .sh => |a| {
-                    const offset: u32 = @bitCast(@as(i32, a.imm));
-                    self.write(u16, self.r(a.rs) +% offset, @intCast(self.r(a.rt) & 0xffff));
-                    self.pc +%= 4;
-                },
-                .andi => |a| {
-                    const imm: u16 = @bitCast(a.imm);
-                    self.set_r(a.rt, self.r(a.rs) & @as(u32, imm));
-                    self.pc +%= 4;
-                },
-                .sb => |a| {
-                    const offset: u32 = @bitCast(@as(i32, a.imm));
-                    self.write(u8, self.r(a.rs) +% offset, @intCast(self.r(a.rt) & 0xff));
-                    self.pc +%= 4;
-                },
-                .jr => |a| {
-                    const new_pc = self.r(a.rs);
-                    self.pc +%= 4;
-                    // Execute instruction in the branch delay slot
-                    self.step();
-                    self.pc = new_pc;
-                },
-                .lb => |a| {
-                    const offset: u32 = @bitCast(@as(i32, a.imm));
-                    self.set_r(a.rt, @as(u32, self.read(u8, self.r(a.rs) +% offset)));
+                .rfe => |a| {
+                    _ = a;
+                    std.debug.print("TODO: pc={x:0>8} rfe\n", .{self.pc});
                     self.pc +%= 4;
                 },
                 .mfc0 => |a| {
                     _ = a;
                     self.pc +%= 4;
                     // TODO
-                },
-                .@"and" => |a| {
-                    self.set_r(a.rd, self.r(a.rs) & self.r(a.rt));
-                    self.pc +%= 4;
-                },
-                .add => |a| {
-                    // TODO: overflow trap
-                    self.set_r(a.rd, self.r(a.rs) +% self.r(a.rt));
-                    self.pc +%= 4;
                 },
                 .bc0f => |a| {
                     _ = a;
@@ -328,6 +420,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 },
                 else => std.debug.panic("TODO: inst {?}", .{inst}),
             }
+            return .{ dst_r, dst_v };
         }
 
         fn branch_cmp(self: *Self, cmp_result: bool, imm: i16) void {
@@ -371,6 +464,9 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         }
 
         pub fn read(self: *Self, comptime T: type, addr: u32) T {
+            if (self.cop0.status_reg & (1 << COP0_SR_ISC) != 0) {
+                std.debug.panic("TODO: read Isolate Cache addr {x:0>8}", .{addr});
+            }
             Self.check_alignment(T, addr);
             if (ADDR_KUSEG <= addr and addr < ADDR_KUSEG + RAM_SIZE) {
                 return self.ram_read(T, addr - ADDR_KUSEG);
@@ -395,7 +491,10 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             }
         }
 
-        fn write(self: *Self, comptime T: type, addr: u32, v: T) void {
+        pub fn write(self: *Self, comptime T: type, addr: u32, v: T) void {
+            if (self.cop0.status_reg & (1 << COP0_SR_ISC) != 0) {
+                std.debug.panic("TODO: write Isolate Cache addr {x:0>8}", .{addr});
+            }
             Self.check_alignment(T, addr);
             if (ADDR_KUSEG <= addr and addr < ADDR_KUSEG + RAM_SIZE) {
                 self.ram_write(T, addr - ADDR_KUSEG, v);
@@ -406,6 +505,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             } else if (ADDR_IO_PORTS <= addr and addr < ADDR_IO_PORTS + IO_PORTS_SIZE) {
                 self.io_regs_write(T, addr - ADDR_IO_PORTS, v);
             } else if (ADDR_KSEG2 <= addr and addr < ADDR_KSEG2 + CACHECTL_SIZE) {
+                std.debug.print("TODO: write {s} at CACHECTL {x:0>8} value {x:0>8}\n", .{ @typeName(T), addr - ADDR_KSEG2, v });
                 // TODO
                 // @panic("TODO: CACHECTL");
             } else {
