@@ -1,4 +1,5 @@
 const root = @import("root.zig");
+const RegIdx = root.RegIdx;
 const Op = root.Op;
 const Inst = root.Inst;
 const ITypeArgs = root.ITypeArgs;
@@ -161,16 +162,16 @@ fn dec_cop_bc_opcode(v: u32) u32 {
     return (v & COP_BC_OPCODE_MASK) >> COP_BC_OPCODE_SHIFT;
 }
 
-fn rs(v: u32) u8 {
-    return @intCast((v & RS_MASK) >> RS_SHIFT);
+fn rs(v: u32) RegIdx {
+    return .{@intCast((v & RS_MASK) >> RS_SHIFT)};
 }
 
-fn rt(v: u32) u8 {
-    return @intCast((v & RT_MASK) >> RT_SHIFT);
+fn rt(v: u32) RegIdx {
+    return .{@intCast((v & RT_MASK) >> RT_SHIFT)};
 }
 
-fn rd(v: u32) u8 {
-    return @intCast((v & RD_MASK) >> RD_SHIFT);
+fn rd(v: u32) RegIdx {
+    return .{@intCast((v & RD_MASK) >> RD_SHIFT)};
 }
 
 fn imm5(v: u32) u8 {

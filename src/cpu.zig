@@ -5,6 +5,7 @@ const ArrayList = std.ArrayList;
 
 const root = @import("root.zig");
 const Inst = root.Inst;
+const RegIdx = root.RegIdx;
 const InstArgs = root.InstArgs;
 const Op = root.Op;
 
@@ -16,25 +17,49 @@ const fmt_reg = disasm.fmt_reg;
 const fmt_inst = disasm.fmt_inst;
 const print_disasm = disasm.print_disasm;
 
-pub const RAM_SIZE: usize = 4 * 512 * 1024; // 2 MiB
-pub const EXP_REG1_SIZE: usize = 8 * 1024; // 8 KiB
-pub const SCRATCH_SIZE: usize = 1024; // 1 KiB
-pub const IO_PORTS_SIZE: usize = 8 * 1024; // 8 KiB
-pub const EXP_REG2_SIZE: usize = 8 * 1024; // 8 KiB
-pub const EXP_REG3_SIZE: usize = 2 * 1024 * 1024; // 2 MiB
-pub const BIOS_SIZE: usize = 512 * 1024; // 512 KiB
-pub const CACHECTL_SIZE: usize = 512; // 0.5 KiB
-pub const ADDR_KUSEG: u32 = 0x0000_0000;
-pub const ADDR_KSEG0: u32 = 0x8000_0000;
-pub const ADDR_KSEG1: u32 = 0xa000_0000;
-pub const ADDR_KSEG2: u32 = 0xfffe_0000;
-pub const ADDR_RESET: u32 = ADDR_BIOS;
+pub const SIZE_RAM: usize = 4 * 512 * 1024; // 2 MiB
+pub const SIZE_BIOS: usize = 512 * 1024; // 512 KiB
+pub const SIZE_EXP_REG1: usize = 8 * 1024; // 8 KiB
+pub const SIZE_SCRATCH: usize = 1024; // 1 KiB
+pub const SIZE_IO_PORTS: usize = 8 * 1024; // 8 KiB
+pub const SIZE_EXP_REG2: usize = 8 * 1024; // 8 KiB
+pub const SIZE_EXP_REG3: usize = 2 * 1024 * 1024; // 2 MiB
+pub const SIZE_CACHECTL: usize = 512; // 0.5 KiB
+// Physical addresses
+pub const ADDR_RAM: u32 = 0x0000_0000;
+pub const ADDR_BIOS: u32 = 0x1fc0_0000;
 pub const ADDR_EXP_REG1: u32 = 0x1f00_0000;
 pub const ADDR_SCRATCH: u32 = 0x1f80_0000;
 pub const ADDR_IO_PORTS: u32 = 0x1f80_1000;
 pub const ADDR_EXP_REG2: u32 = 0x1f80_2000;
 pub const ADDR_EXP_REG3: u32 = 0x1fa0_0000;
-pub const ADDR_BIOS: u32 = 0xbfc0_0000;
+pub const ADDR_CACHECTL: u32 = 0xfffe_0000;
+
+pub const VADDR_KUSEG: u32 = 0x0000_0000;
+pub const VADDR_KSEG0: u32 = 0x8000_0000;
+pub const VADDR_KSEG1: u32 = 0xa000_0000;
+pub const VADDR_RESET: u32 = VADDR_KSEG1 + ADDR_BIOS;
+
+pub const REGION_MASK = [_]u32{
+    // KUSEG: 2048 MB vaddr corresponds to paddr
+    0xffff_ffff, 0xffff_ffff, 0xffff_ffff, 0xffff_ffff,
+    // KSEG0:  512 MB
+    0x1fff_ffff,
+    // KSEG1:  512 MB
+    0x1fff_ffff,
+    // KSEG2: 1024 MB vaddr corresponds to paddr
+    0xffff_ffff, 0xffff_ffff,
+};
+
+fn addr_region(addr: u32) usize {
+    return addr >> 29;
+}
+
+fn vaddr_to_paddr(vaddr: u32) struct { usize, u32 } {
+    const region = addr_region(vaddr);
+    const paddr = vaddr & REGION_MASK[region];
+    return .{ region, paddr };
+}
 
 fn buf_read(comptime T: type, buf: []const u8, addr: u32) T {
     return switch (T) {
@@ -90,22 +115,18 @@ const COP0_SR_ISC = 16; // Isolate Cache (0=No, 1=Isolate)
 
 const Cop0 = struct {
     // COP0 Register Summary
-    //   cop0r0-r2   - N/A
-    //   cop0r3      - BPC - Breakpoint on execute (R/W)
-    //   cop0r4      - N/A
-    //   cop0r5      - BDA - Breakpoint on data access (R/W)
-    //   cop0r6      - JUMPDEST - Randomly memorized jump address (R)
-    //   cop0r7      - DCIC - Breakpoint control (R/W)
-    //   cop0r8      - BadVaddr - Bad Virtual Address (R)
-    //   cop0r9      - BDAM - Data Access breakpoint mask (R/W)
-    //   cop0r10     - N/A
-    //   cop0r11     - BPCM - Execute breakpoint mask (R/W)
-    //   cop0r12     - SR - System status register (R/W)
-    //   cop0r13     - CAUSE - (R)  Describes the most recently recognised exception
-    //   cop0r14     - EPC - Return Address from Trap (R)
-    //   cop0r15     - PRID - Processor ID (R)
-    //   cop0r16-r31 - Garbage
-    //   cop0r32-r63 - N/A - None such (Control regs)
+    const REG_BPC = 3; // Breakpoint on execute (R/W)
+    const REG_BDA = 5; // Breakpoint on data access (R/W)
+    const REG_JUMPDEST = 6; // Randomly memorized jump address (R)
+    const REG_DCIC = 7; // Breakpoint control (R/W)
+    const REG_BadVaddr = 8; // Bad Virtual Address (R)
+    const REG_BDAM = 9; // Data Access breakpoint mask (R/W)
+    const REG_BPCM = 11; // Execute breakpoint mask (R/W)
+    const REG_SR = 12; // System status register (R/W)
+    const REG_CAUSE = 13; // Describes the most recently recognised exception (R)
+    const REG_EPC = 14; // Return Address from Trap (R)
+    const REG_PRID = 15; // Processor ID (R)
+
     status_reg: u32, // SR
 
     const Self = @This();
@@ -116,10 +137,15 @@ const Cop0 = struct {
         };
     }
 
-    fn set_r(self: *Self, i: usize, v: u32) void {
-        switch (i) {
-            12 => self.status_reg = v,
-            else => std.debug.panic("TODO: cop0 set_r {} {x:0>8}", .{ i, v }),
+    fn set_r(self: *Self, idx: RegIdx, v: u32) void {
+        switch (idx[0]) {
+            REG_BPC, REG_BDA, REG_JUMPDEST, REG_DCIC, REG_BDAM, REG_BPCM, REG_CAUSE => {
+                if (v != 0) {
+                    std.debug.panic("TODO: cop0 write reg {} {x:0>8}", .{ idx[0], v });
+                }
+            },
+            REG_SR => self.status_reg = v,
+            else => std.debug.panic("TODO: cop0 set_r {} {x:0>8}", .{ idx[0], v }),
         }
     }
 };
@@ -145,12 +171,12 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             bios: []const u8,
             dbg_writer: dbg_writer_type,
         ) !Self {
-            if (bios.len != BIOS_SIZE) {
+            if (bios.len != SIZE_BIOS) {
                 return error.BiosInvalidSize;
             }
-            const ram = try allocator.alloc(u8, RAM_SIZE);
+            const ram = try allocator.alloc(u8, SIZE_RAM);
             @memset(ram, 0);
-            const bios_copy = try allocator.alloc(u8, BIOS_SIZE);
+            const bios_copy = try allocator.alloc(u8, SIZE_BIOS);
             std.mem.copyForwards(u8, bios_copy, bios);
             const self = Self{
                 .dbg_w = dbg_writer,
@@ -158,7 +184,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .dbg = Dbg.init(allocator),
                 .regs = [_]u32{0} ** 32,
                 .cop0 = Cop0.init(),
-                .pc = ADDR_RESET,
+                .pc = VADDR_RESET,
                 .lo = 0,
                 .hi = 0,
                 .bios = bios_copy,
@@ -174,12 +200,12 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             self.dbg.deinit();
         }
 
-        pub fn r(self: *const Self, i: usize) u32 {
-            return self.regs[i];
+        pub fn r(self: *const Self, idx: RegIdx) u32 {
+            return self.regs[idx[0]];
         }
 
-        pub fn set_r(self: *Self, i: usize, v: u32) void {
-            self.regs[i] = v;
+        pub fn set_r(self: *Self, idx: RegIdx, v: u32) void {
+            self.regs[idx[0]] = v;
             self.regs[0] = 0;
         }
 
@@ -194,8 +220,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                             else => try writer.print("            ", .{}),
                         }
                     } else {
-                        const i: u8 = @intCast((column - 1) * 8 + row);
-                        try writer.print("   {d:0>2} {}: {x:0>8}", .{ i, fmt_reg(i), self.r(i) });
+                        const idx: RegIdx = .{@intCast((column - 1) * 8 + row)};
+                        try writer.print("   {d:0>2} {}: {x:0>8}", .{ idx[0], fmt_reg(idx), self.r(idx) });
                     }
                 }
                 try writer.print("\n", .{});
@@ -225,7 +251,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         }
 
         // step and return the reg that has been written by the operation
-        fn _step(self: *Self) struct { u8, u32 } {
+        fn _step(self: *Self) struct { RegIdx, u32 } {
             // Fetch next instruction
             const inst_raw = self.read(u32, self.pc);
             const inst = decode(inst_raw) orelse std.debug.panic("TODO: unknown inst {x:0>8}", .{inst_raw});
@@ -237,7 +263,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     for (self.dbg.breaks.items) |addr| {
                         if (addr == self.pc) {
                             self.dbg._break = true;
-                            return .{ 0, 0 };
+                            return .{ .{0}, 0 };
                         }
                     }
                 }
@@ -253,8 +279,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         }
 
         // execute instruction and return the reg that needs to been written by the operation
-        pub fn exec_no_write_regs(self: *Self, inst: Inst) struct { u8, u32 } {
-            var dst_r: u8 = 0;
+        pub fn exec_no_write_regs(self: *Self, inst: Inst) struct { RegIdx, u32 } {
+            var dst_r: RegIdx = .{0};
             var dst_v: u32 = 0;
             switch (inst) {
                 // ALU
@@ -379,7 +405,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 },
                 .jal => |a| {
                     const new_pc = (self.pc & 0xf0000000) + a.imm * 4;
-                    self.set_r(31, self.pc + 8);
+                    self.set_r(.{31}, self.pc + 8);
                     self.pc +%= 4;
                     // Execute instruction in the branch delay slot
                     _ = self.step();
@@ -396,7 +422,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     if (a.imm != 0) {
                         std.debug.panic("TODO: mtc with sel={} at pc={x:0>8}", .{ a.imm, self.pc });
                     }
-                    switch (a.rt) {
+                    switch (a.rt[0]) {
                         12 => self.cop0.set_r(a.rt, self.r(a.rd)),
                         else => std.debug.print("TODO: pc={x:0>8} mtc0 r{}, r{}, {}\n", .{ self.pc, a.rt, a.rd, a.imm }),
                     }
@@ -468,26 +494,24 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 std.debug.panic("TODO: read Isolate Cache addr {x:0>8}", .{addr});
             }
             Self.check_alignment(T, addr);
-            if (ADDR_KUSEG <= addr and addr < ADDR_KUSEG + RAM_SIZE) {
-                return self.ram_read(T, addr - ADDR_KUSEG);
-            } else if (ADDR_KSEG0 <= addr and addr < ADDR_KSEG0 + RAM_SIZE) {
-                return self.ram_read(T, addr - ADDR_KSEG0);
-            } else if (ADDR_KSEG1 <= addr and addr < ADDR_KSEG1 + RAM_SIZE) {
-                return self.ram_read(T, addr - ADDR_KSEG1);
-            } else if (ADDR_BIOS <= addr and addr < ADDR_BIOS + BIOS_SIZE) {
-                return self.bios_read(T, addr - ADDR_BIOS);
-            } else if (ADDR_EXP_REG1 <= addr and addr < ADDR_EXP_REG1 + EXP_REG1_SIZE) {
+            const region, const paddr = vaddr_to_paddr(addr);
+            _ = region;
+            if (ADDR_RAM <= paddr and paddr < SIZE_RAM) {
+                return self.ram_read(T, paddr - ADDR_RAM);
+            } else if (ADDR_BIOS <= paddr and paddr < ADDR_BIOS + SIZE_BIOS) {
+                return self.bios_read(T, paddr - ADDR_BIOS);
+            } else if (ADDR_EXP_REG1 <= paddr and paddr < ADDR_EXP_REG1 + SIZE_EXP_REG1) {
                 // TODO
-                // @panic("TODO: EXP_REG1");
+                // @panic("TODO: EXP_REG0");
                 return 0;
-            } else if (ADDR_IO_PORTS <= addr and addr < ADDR_IO_PORTS + IO_PORTS_SIZE) {
-                return self.io_regs_read(T, addr);
-            } else if (ADDR_KSEG2 <= addr and addr < ADDR_KSEG2 + CACHECTL_SIZE) {
+            } else if (ADDR_IO_PORTS <= paddr and paddr < ADDR_IO_PORTS + SIZE_IO_PORTS) {
+                return self.io_regs_read(T, paddr);
+            } else if (ADDR_CACHECTL <= paddr and paddr < ADDR_CACHECTL + SIZE_CACHECTL) {
                 // TODO
                 // @panic("TODO: CACHECTL");
                 return 0;
             } else {
-                std.debug.panic("TODO: read addr {x:0>8}", .{addr});
+                std.debug.panic("TODO: read paddr {x:0>8}", .{paddr});
             }
         }
 
@@ -496,16 +520,14 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 std.debug.panic("TODO: write Isolate Cache addr {x:0>8}", .{addr});
             }
             Self.check_alignment(T, addr);
-            if (ADDR_KUSEG <= addr and addr < ADDR_KUSEG + RAM_SIZE) {
-                self.ram_write(T, addr - ADDR_KUSEG, v);
-            } else if (ADDR_KSEG0 <= addr and addr < ADDR_KSEG0 + RAM_SIZE) {
-                self.ram_write(T, addr - ADDR_KSEG0, v);
-            } else if (ADDR_KSEG1 <= addr and addr < ADDR_KSEG1 + RAM_SIZE) {
-                self.ram_write(T, addr - ADDR_KSEG1, v);
-            } else if (ADDR_IO_PORTS <= addr and addr < ADDR_IO_PORTS + IO_PORTS_SIZE) {
-                self.io_regs_write(T, addr - ADDR_IO_PORTS, v);
-            } else if (ADDR_KSEG2 <= addr and addr < ADDR_KSEG2 + CACHECTL_SIZE) {
-                std.debug.print("TODO: write {s} at CACHECTL {x:0>8} value {x:0>8}\n", .{ @typeName(T), addr - ADDR_KSEG2, v });
+            const region, const paddr = vaddr_to_paddr(addr);
+            _ = region;
+            if (ADDR_RAM <= paddr and paddr < ADDR_RAM + SIZE_RAM) {
+                self.ram_write(T, paddr - ADDR_RAM, v);
+            } else if (ADDR_IO_PORTS <= paddr and paddr < ADDR_IO_PORTS + SIZE_IO_PORTS) {
+                self.io_regs_write(T, paddr - ADDR_IO_PORTS, v);
+            } else if (ADDR_CACHECTL <= paddr and paddr < ADDR_CACHECTL + SIZE_CACHECTL) {
+                std.debug.print("TODO: write {s} at CACHECTL {x:0>8} value {x:0>8}\n", .{ @typeName(T), addr - ADDR_CACHECTL, v });
                 // TODO
                 // @panic("TODO: CACHECTL");
             } else {

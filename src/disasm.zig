@@ -3,6 +3,7 @@ const std = @import("std");
 const decoder = @import("decoder.zig");
 const decode = decoder.decode;
 const root = @import("root.zig");
+const RegIdx = root.RegIdx;
 const Inst = root.Inst;
 const InstArgs = root.InstArgs;
 const Op = root.Op;
@@ -10,12 +11,12 @@ const ITypeArgs = root.ITypeArgs;
 const RTypeArgs = root.RTypeArgs;
 const JTypeArgs = root.JTypeArgs;
 
-pub fn fmt_reg(i: u8) FmtReg {
-    return .{ .i = i };
+pub fn fmt_reg(idx: RegIdx) FmtReg {
+    return .{ .idx = idx };
 }
 
 pub const FmtReg = struct {
-    i: u8,
+    idx: RegIdx,
     const Self = @This();
 
     pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
@@ -30,7 +31,7 @@ pub const FmtReg = struct {
         // sp: Stak Pointer
         // fp: Frame Pointer
         // ra: Return Address
-        const name = switch (self.i) {
+        const name = switch (self.idx[0]) {
             0 => "zr",
             1 => "at",
             2 => "v0",
@@ -70,7 +71,7 @@ pub const FmtReg = struct {
     }
 };
 
-fn fmt_offset_reg(w: anytype, offset: i16, reg: u8) !void {
+fn fmt_offset_reg(w: anytype, offset: i16, reg: RegIdx) !void {
     if (offset == 0) {
         try w.print("({})", .{fmt_reg(reg)});
     } else if (offset > 0) {
@@ -157,13 +158,13 @@ pub const FmtInst = struct {
         // Pseudo opcodes
         switch (inst) {
             .sll => |a| {
-                if (a.rd == 0 and a.rt == 0 and a.imm == 0) {
+                if (a.rd[0] == 0 and a.rt[0] == 0 and a.imm == 0) {
                     try writer.print("nop", .{});
                     return;
                 }
             },
             .@"or" => |a| {
-                if (a.rt == 0) {
+                if (a.rt[0] == 0) {
                     try writer.print("mov {}, {}", .{ fmt_reg(a.rd), fmt_reg(a.rs) });
                     return;
                 }

@@ -10,7 +10,7 @@ const fmt_inst = disasm.fmt_inst;
 const _cpu = @import("cpu.zig");
 const Cpu = _cpu.Cpu;
 const Cfg = _cpu.Cfg;
-const BIOS_SIZE = _cpu.BIOS_SIZE;
+const SIZE_BIOS = _cpu.SIZE_BIOS;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -49,7 +49,7 @@ pub fn main() !void {
     };
 
     const bios_file = try std.fs.cwd().openFile(opts_bios, .{});
-    const bios = try bios_file.reader().readAllAlloc(allocator, BIOS_SIZE);
+    const bios = try bios_file.reader().readAllAlloc(allocator, SIZE_BIOS);
     defer allocator.free(bios);
 
     const w = std.io.getStdOut().writer();

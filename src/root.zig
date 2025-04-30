@@ -1,8 +1,14 @@
 const std = @import("std");
 
+pub const RegIdx = struct { u8 };
+
+pub fn r(idx: u8) RegIdx {
+    return RegIdx{idx};
+}
+
 pub const ITypeArgs = struct {
-    rs: u8,
-    rt: u8,
+    rs: RegIdx,
+    rt: RegIdx,
     imm: i16,
 };
 
@@ -11,9 +17,9 @@ pub const JTypeArgs = struct {
 };
 
 pub const RTypeArgs = struct {
-    rs: u8,
-    rt: u8,
-    rd: u8,
+    rs: RegIdx,
+    rt: RegIdx,
+    rd: RegIdx,
     imm: u8,
 };
 

@@ -2,6 +2,8 @@ const std = @import("std");
 const testing = std.testing;
 const expectEqual = std.testing.expectEqual;
 
+const root = @import("root.zig");
+const r = root.r;
 const _cpu = @import("cpu.zig");
 const Cpu = _cpu.Cpu;
 const Cfg = _cpu.Cfg;
@@ -147,26 +149,26 @@ test "op_lw_" {
     cpu.write(u32, 0x50, 0x1234_5678);
 
     cpu.pc = 0;
-    cpu.set_r(2, 0x40);
+    cpu.set_r(r(2), 0x40);
     cpu.write(u32, cpu.pc + 4, 0x0000_0000); // nop at the branch delay slot
-    cpu.exec(.{ .lw = .{ .rt = 1, .rs = 2, .imm = 0x10 } });
-    try expectEqual(0x1234_5678, cpu.r(1));
+    cpu.exec(.{ .lw = .{ .rt = r(1), .rs = r(2), .imm = 0x10 } });
+    try expectEqual(0x1234_5678, cpu.r(r(1)));
 
     cpu.pc = 0;
-    cpu.set_r(2, 0x40);
+    cpu.set_r(r(2), 0x40);
     cpu.write(u32, cpu.pc + 4, 0x24880b88); // `addiu r8, r4, 0xb88` at the load delay slot
-    cpu.exec(.{ .lw = .{ .rt = 4, .rs = 2, .imm = 0x10 } });
+    cpu.exec(.{ .lw = .{ .rt = r(4), .rs = r(2), .imm = 0x10 } });
     // The delay slot instruction reads r4 before the load writes to it (so it
     // reads v=0 instead of v=1234_5678)
-    try expectEqual(0x1234_5678, cpu.r(4));
-    try expectEqual(0xb88, cpu.r(8));
+    try expectEqual(0x1234_5678, cpu.r(r(4)));
+    try expectEqual(0xb88, cpu.r(r(8)));
 
     cpu.pc = 0;
-    cpu.set_r(2, 0x40);
+    cpu.set_r(r(2), 0x40);
     cpu.write(u32, cpu.pc + 4, 0x24080b88); // `addiu r8, r0, 0xb88` at the load delay slot
-    cpu.exec(.{ .lw = .{ .rt = 8, .rs = 2, .imm = 0x10 } });
+    cpu.exec(.{ .lw = .{ .rt = r(8), .rs = r(2), .imm = 0x10 } });
     // The dest register is overwritten by the load delay slot instruction
-    try expectEqual(0xb88, cpu.r(8));
+    try expectEqual(0xb88, cpu.r(r(8)));
 }
 
 test "op_sltu_" {
