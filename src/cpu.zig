@@ -27,12 +27,12 @@ pub const SIZE_EXP_REG3: usize = 2 * 1024 * 1024; // 2 MiB
 pub const SIZE_CACHECTL: usize = 512; // 0.5 KiB
 // Physical addresses
 pub const ADDR_RAM: u32 = 0x0000_0000;
-pub const ADDR_BIOS: u32 = 0x1fc0_0000;
 pub const ADDR_EXP_REG1: u32 = 0x1f00_0000;
 pub const ADDR_SCRATCH: u32 = 0x1f80_0000;
 pub const ADDR_IO_PORTS: u32 = 0x1f80_1000;
 pub const ADDR_EXP_REG2: u32 = 0x1f80_2000;
 pub const ADDR_EXP_REG3: u32 = 0x1fa0_0000;
+pub const ADDR_BIOS: u32 = 0x1fc0_0000;
 pub const ADDR_CACHECTL: u32 = 0xfffe_0000;
 
 pub const VADDR_KUSEG: u32 = 0x0000_0000;
@@ -96,6 +96,7 @@ pub const Cfg = struct {
 
 const Dbg = struct {
     trace_inst: bool = false,
+    trace_io: bool = false,
     breaks: ArrayList(u32),
     _break: bool = false,
     _first_step: bool = true,
@@ -253,7 +254,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         // step and return the reg that has been written by the operation
         fn _step(self: *Self) struct { RegIdx, u32 } {
             // Fetch next instruction
-            const inst_raw = self.read(u32, self.pc);
+            const inst_raw = self.read(true, u32, self.pc);
             const inst = decode(inst_raw) orelse std.debug.panic("TODO: unknown inst {x:0>8}", .{inst_raw});
             if (self.cfg.dbg) {
                 if (self.dbg.trace_inst) {
@@ -357,21 +358,20 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 // Load & Store
                 .lw => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
-                    const v_lw = self.read(u32, self.r(a.rs) +% offset);
+                    const v_lw = self.read(false, u32, self.r(a.rs) +% offset);
                     self.pc +%= 4;
                     // Execute instruction in the load delay slot
-                    const delay_dst_r, const delay_dst_v = self._step();
+                    dst_r, dst_v = self._step();
                     self.set_r(a.rt, v_lw);
-                    self.set_r(delay_dst_r, delay_dst_v);
                 },
                 .lb => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
-                    const v_lw = @as(u32, self.read(u8, self.r(a.rs) +% offset));
+                    const v_lw_i8: i8 = @bitCast(self.read(false, u8, self.r(a.rs) +% offset));
+                    const v_lw: u32 = @bitCast(@as(i32, v_lw_i8));
                     self.pc +%= 4;
                     // Execute instruction in the load delay slot
-                    const delay_dst_r, const delay_dst_v = self._step();
+                    dst_r, dst_v = self._step();
                     self.set_r(a.rt, v_lw);
-                    self.set_r(delay_dst_r, delay_dst_v);
                 },
                 .sw => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
@@ -422,12 +422,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     if (a.imm != 0) {
                         std.debug.panic("TODO: mtc with sel={} at pc={x:0>8}", .{ a.imm, self.pc });
                     }
-                    switch (a.rt[0]) {
-                        12 => self.cop0.set_r(a.rt, self.r(a.rd)),
-                        else => std.debug.print("TODO: pc={x:0>8} mtc0 r{}, r{}, {}\n", .{ self.pc, a.rt, a.rd, a.imm }),
-                    }
-                    // TODO
-                    // self.set_r(a.rt, self.cop0.ctl_reg[a.rd]) self.pc +%= 4;
+                    self.cop0.set_r(a.rd, self.r(a.rt));
+                    self.pc +%= 4;
                 },
                 .rfe => |a| {
                     _ = a;
@@ -489,9 +485,12 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             return buf_read(T, self.bios, addr);
         }
 
-        pub fn read(self: *Self, comptime T: type, addr: u32) T {
-            if (self.cop0.status_reg & (1 << COP0_SR_ISC) != 0) {
-                std.debug.panic("TODO: read Isolate Cache addr {x:0>8}", .{addr});
+        pub fn read(self: *Self, comptime code: bool, comptime T: type, addr: u32) T {
+            if (!code) {
+                if (self.cop0.status_reg & (1 << COP0_SR_ISC) != 0) {
+                    std.debug.print("TODO: read {s} Isolate Cache addr {x:0>8} (ignored)\n", .{ @typeName(T), addr });
+                    return 0;
+                }
             }
             Self.check_alignment(T, addr);
             const region, const paddr = vaddr_to_paddr(addr);
@@ -501,14 +500,12 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             } else if (ADDR_BIOS <= paddr and paddr < ADDR_BIOS + SIZE_BIOS) {
                 return self.bios_read(T, paddr - ADDR_BIOS);
             } else if (ADDR_EXP_REG1 <= paddr and paddr < ADDR_EXP_REG1 + SIZE_EXP_REG1) {
-                // TODO
-                // @panic("TODO: EXP_REG0");
+                std.debug.print("TODO: read {s} at EXP_REG1 {x:0>8}\n", .{ @typeName(T), addr });
                 return 0;
             } else if (ADDR_IO_PORTS <= paddr and paddr < ADDR_IO_PORTS + SIZE_IO_PORTS) {
                 return self.io_regs_read(T, paddr);
             } else if (ADDR_CACHECTL <= paddr and paddr < ADDR_CACHECTL + SIZE_CACHECTL) {
-                // TODO
-                // @panic("TODO: CACHECTL");
+                std.debug.print("TODO: read {s} at CACHECTL {x:0>8}\n", .{ @typeName(T), addr });
                 return 0;
             } else {
                 std.debug.panic("TODO: read paddr {x:0>8}", .{paddr});
@@ -517,7 +514,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
 
         pub fn write(self: *Self, comptime T: type, addr: u32, v: T) void {
             if (self.cop0.status_reg & (1 << COP0_SR_ISC) != 0) {
-                std.debug.panic("TODO: write Isolate Cache addr {x:0>8}", .{addr});
+                std.debug.print("TODO: write {s} Isolate Cache addr {x:0>8} value {x:0>8} (ignored)\n", .{ @typeName(T), addr, v });
+                return;
             }
             Self.check_alignment(T, addr);
             const region, const paddr = vaddr_to_paddr(addr);
@@ -527,7 +525,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             } else if (ADDR_IO_PORTS <= paddr and paddr < ADDR_IO_PORTS + SIZE_IO_PORTS) {
                 self.io_regs_write(T, paddr - ADDR_IO_PORTS, v);
             } else if (ADDR_CACHECTL <= paddr and paddr < ADDR_CACHECTL + SIZE_CACHECTL) {
-                std.debug.print("TODO: write {s} at CACHECTL {x:0>8} value {x:0>8}\n", .{ @typeName(T), addr - ADDR_CACHECTL, v });
+                std.debug.print("TODO: write {s} at CACHECTL {x:0>8} value {x:0>8}\n", .{ @typeName(T), addr, v });
                 // TODO
                 // @panic("TODO: CACHECTL");
             } else {
@@ -536,12 +534,20 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         }
 
         fn io_regs_read(self: *Self, comptime T: type, addr: u32) T {
-            _ = self;
+            if (self.cfg.dbg) {
+                if (self.dbg.trace_io) {
+                    std.debug.print("io read {s} at {x:0>8}\n", .{ @typeName(T), addr + ADDR_IO_PORTS });
+                }
+            }
             std.debug.panic("TODO: io_regs_read addr {x:0>8}", .{addr});
         }
 
         fn io_regs_write(self: *Self, comptime T: type, addr: u32, v: T) void {
-            _ = self;
+            if (self.cfg.dbg) {
+                if (self.dbg.trace_io) {
+                    std.debug.print("io write {s} {x:0>8} at {x:0>8}\n", .{ @typeName(T), v, addr + ADDR_IO_PORTS });
+                }
+            }
             switch (T) {
                 u8 => switch (addr) {
                     DTL_H2000_PSX_POST => {

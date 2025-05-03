@@ -28,6 +28,10 @@
             .url = "git+https://github.com/ikskuh/zig-args?ref=master#9425b94c103a031777fdd272c555ce93a7dea581",
             .hash = "args-0.0.0-CiLiqv_NAAC97fGpk9hS2K681jkiqPsWP6w3ucb_ctGH",
         },
+        .linenoize = .{
+            .url = "git+https://github.com/joachimschmidt557/linenoize.git?ref=v0.1.1#185f1dbd8b46f37d58cce96509ce8d6c65ec6cd3",
+            .hash = "linenoize-0.1.1-J7HK8IjZAAAEvol7whndbSwd4rG3atbT0e_F61LKXgZ4",
+        },
     },
     .paths = .{
         "build.zig",

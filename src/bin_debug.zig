@@ -2,6 +2,8 @@ const std = @import("std");
 const eql = std.mem.eql;
 const argsParser = @import("args");
 
+const Linenoise = @import("linenoize").Linenoise;
+
 const decoder = @import("decoder.zig");
 const decode = decoder.decode;
 const disasm = @import("disasm.zig");
@@ -53,8 +55,6 @@ pub fn main() !void {
     defer allocator.free(bios);
 
     const w = std.io.getStdOut().writer();
-    const r = std.io.getStdIn().reader();
-    var buf: [128]u8 = undefined;
 
     const cfg = Cfg{ .dbg = true };
     var cpu = try Cpu(@TypeOf(w), cfg).init(allocator, bios, w);
@@ -62,18 +62,28 @@ pub fn main() !void {
 
     var init_cmd_it = std.mem.tokenizeSequence(u8, opts.cmd orelse "", ";");
 
+    var ln = Linenoise.init(allocator);
+    defer ln.deinit();
+
     var last_cmd: Cmd = .nop;
     loop: while (true) {
-        try w.print("> ", .{});
         var buf_input: ?[]const u8 = undefined;
+        var free_input = false;
         if (init_cmd_it.next()) |cmd_str| {
-            try w.print("{s}\n", .{cmd_str});
+            try w.print("$> {s}\n", .{cmd_str});
             buf_input = cmd_str;
         } else {
-            buf_input = try r.readUntilDelimiterOrEof(&buf, '\n');
+            buf_input = try ln.linenoise("> ");
+            free_input = true;
         }
-
         const input = buf_input orelse break;
+        defer {
+            if (free_input) {
+                allocator.free(input);
+            }
+        }
+        try ln.history.add(input);
+
         const cmd = parse_input(input) catch |err| {
             switch (err) {
                 error.InvalidArgument => try w.print("ERR: Invalid argument\n", .{}),
@@ -85,6 +95,9 @@ pub fn main() !void {
         switch (cmd) {
             .trace_inst => |a| {
                 cpu.dbg.trace_inst = a.v;
+            },
+            .trace_io => |a| {
+                cpu.dbg.trace_io = a.v;
             },
             .step => |a| {
                 for (0..a.n) |_| {
@@ -140,6 +153,7 @@ pub fn main() !void {
 const Cmd = union(enum) {
     step: struct { n: usize },
     trace_inst: struct { v: bool },
+    trace_io: struct { v: bool },
     @"continue",
     @"break": struct { addr: u32 },
     delete_break: struct { addr: u32 },
@@ -199,6 +213,9 @@ fn parse_input(input: []const u8) !?Cmd {
     } else if (eql(u8, cmd, "trace_inst")) {
         const value = try parse_bool(&it);
         return .{ .trace_inst = .{ .v = value } };
+    } else if (eql(u8, cmd, "trace_io")) {
+        const value = try parse_bool(&it);
+        return .{ .trace_io = .{ .v = value } };
     } else if (eql(u8, cmd, "s")) {
         const n = try parse_int_or(usize, &it, 1);
         return .{ .step = .{ .n = n } };
@@ -226,6 +243,7 @@ fn print_help(w: anytype) !void {
         \\ c : Continue runnig until the next breakpoint
         \\ r : Print CPU Registers
         \\ trace_inst {{t,f}} : Enable/disable tracing all executed instructions
+        \\ trace_io {{t,f}} : Enable/disable tracing all IO accesses
         \\ b [addr] : Add breakpoint at `addr`
         \\ db [addr] : Delete breakpoint at `addr`
         \\ ib : (Info) List all breakpoints
@@ -241,7 +259,7 @@ fn disasm_block(writer: anytype, cpu: anytype, addr: u32, n: u32) !void {
     for (0..n) |i| {
         const i_u32: u32 = @intCast(i);
         const a: u32 = addr + i_u32 * 4;
-        const inst_raw = cpu.read(u32, a);
+        const inst_raw = cpu.read(true, u32, a);
         const inst = decode(inst_raw);
         try print_disasm(writer, a, inst_raw, inst);
     }
@@ -255,7 +273,7 @@ fn dump(w: anytype, cpu: anytype, addr: u32, n: u32) !void {
         try w.print("{x:0>8}  ", .{p});
 
         for (0..16) |col| {
-            try w.print("{x:0>2} ", .{cpu.read(u8, p)});
+            try w.print("{x:0>2} ", .{cpu.read(false, u8, p)});
             if (col == 7) {
                 try w.print(" ", .{});
             }
@@ -265,7 +283,7 @@ fn dump(w: anytype, cpu: anytype, addr: u32, n: u32) !void {
 
         try w.print("|", .{});
         for (0..16) |_| {
-            const b = cpu.read(u8, p);
+            const b = cpu.read(false, u8, p);
             if (std.ascii.isPrint(b)) {
                 try w.print("{c}", .{b});
             } else {
