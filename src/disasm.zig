@@ -32,7 +32,8 @@ pub const FmtReg = struct {
         // fp: Frame Pointer
         // ra: Return Address
         const name = switch (self.idx[0]) {
-            0 => "zr",
+            // 0 => "zr",
+            0 => "zero", // duckstation compatible
             1 => "at",
             2 => "v0",
             3 => "v1",
@@ -73,7 +74,9 @@ pub const FmtReg = struct {
 
 fn fmt_offset_reg(w: anytype, offset: i16, reg: RegIdx) !void {
     if (offset == 0) {
-        try w.print("({})", .{fmt_reg(reg)});
+        // try w.print("({})", .{fmt_reg(reg)});
+        // duckstation compatible
+        try w.print("0x0({})", .{fmt_reg(reg)});
     } else if (offset > 0) {
         try w.print("0x{x}({})", .{ offset, fmt_reg(reg) });
     } else {
@@ -86,23 +89,30 @@ fn fmt_i_ld_st_type(w: anytype, op: []const u8, a: ITypeArgs) !void {
     try fmt_offset_reg(w, a.imm, a.rs);
 }
 fn fmt_i_type(w: anytype, op: []const u8, a: ITypeArgs) !void {
-    try w.print("{s} {}, {}, 0x{x}", .{ op, fmt_reg(a.rt), fmt_reg(a.rs), a.imm });
+    // try w.print("{s} {}, {}, 0x{x}", .{ op, fmt_reg(a.rt), fmt_reg(a.rs), a.imm });
+    // duckstation compatible
+    const imm: u16 = @bitCast(a.imm);
+    try w.print("{s} {}, {}, 0x{x:0>4}", .{ op, fmt_reg(a.rt), fmt_reg(a.rs), imm });
 }
 fn fmt_i_signed_type(w: anytype, op: []const u8, a: ITypeArgs) !void {
-    if (a.imm >= 0) {
-        try w.print("{s} {}, {}, 0x{x}", .{ op, fmt_reg(a.rt), fmt_reg(a.rs), a.imm });
-    } else {
-        try w.print("{s} {}, {}, -0x{x}", .{ op, fmt_reg(a.rt), fmt_reg(a.rs), -a.imm });
-    }
+    // if (a.imm >= 0) {
+    //     try w.print("{s} {}, {}, 0x{x}", .{ op, fmt_reg(a.rt), fmt_reg(a.rs), a.imm });
+    // } else {
+    //     try w.print("{s} {}, {}, -0x{x}", .{ op, fmt_reg(a.rt), fmt_reg(a.rs), -a.imm });
+    // }
+    // duckstation compatible
+    try w.print("{s} {}, {}, {}", .{ op, fmt_reg(a.rt), fmt_reg(a.rs), a.imm });
 }
 fn fmt_i_branch_type(w: anytype, op: []const u8, pc: u32, a: ITypeArgs) !void {
     const offset: u32 = @bitCast(@as(i32, a.imm * 4));
     const dst = pc +% 4 +% offset;
-    try w.print("{s} {}, {}, 0x{x}", .{ op, fmt_reg(a.rs), fmt_reg(a.rt), dst });
+    try w.print("{s} {}, {}, 0x{x:0>8}", .{ op, fmt_reg(a.rs), fmt_reg(a.rt), dst });
 }
 fn fmt_i_rt_imm_type(w: anytype, op: []const u8, a: ITypeArgs) !void {
     const imm: u16 = @bitCast(a.imm);
-    try w.print("{s} {}, 0x{x}", .{ op, fmt_reg(a.rt), imm });
+    // try w.print("{s} {}, 0x{x}", .{ op, fmt_reg(a.rt), imm });
+    // duckstation compatible
+    try w.print("{s} {}, 0x{x:0>4}", .{ op, fmt_reg(a.rt), imm });
 }
 fn fmt_i_rs_imm_type(w: anytype, op: []const u8, a: ITypeArgs) !void {
     try w.print("{s} {}, 0x{x}", .{ op, fmt_reg(a.rs), a.imm });
@@ -117,7 +127,7 @@ fn fmt_i_rs_imm_signed_type(w: anytype, op: []const u8, a: ITypeArgs) !void {
 fn fmt_i_rs_imm_branch_type(w: anytype, op: []const u8, pc: u32, a: ITypeArgs) !void {
     const offset: u32 = @bitCast(@as(i32, a.imm * 4));
     const dst = pc +% 4 +% offset;
-    try w.print("{s} {}, 0x{x}", .{ op, fmt_reg(a.rs), dst });
+    try w.print("{s} {}, 0x{x:0>8}", .{ op, fmt_reg(a.rs), dst });
 }
 fn fmt_r_type(w: anytype, op: []const u8, a: RTypeArgs) !void {
     try w.print("{s} {}, {}, {}", .{ op, fmt_reg(a.rd), fmt_reg(a.rs), fmt_reg(a.rt) });
@@ -129,16 +139,24 @@ fn fmt_r_rs_rt_type(w: anytype, op: []const u8, a: RTypeArgs) !void {
     try w.print("{s} {}, {}", .{ op, fmt_reg(a.rs), fmt_reg(a.rt) });
 }
 fn fmt_r_rd_rt_imm_type(w: anytype, op: []const u8, a: RTypeArgs) !void {
-    try w.print("{s} {}, {}, 0x{x}", .{ op, fmt_reg(a.rd), fmt_reg(a.rt), a.imm });
+    // try w.print("{s} {}, {}, 0x{x}", .{ op, fmt_reg(a.rd), fmt_reg(a.rt), a.imm });
+    // duckstation compatible
+    try w.print("{s} {}, {}, {}", .{ op, fmt_reg(a.rd), fmt_reg(a.rt), a.imm });
 }
 fn fmt_j_type(w: anytype, op: []const u8, pc: u32, a: JTypeArgs) !void {
-    try w.print("{s} 0x{x}", .{ op, (pc & 0xf0000000) + a.imm * 4 });
+    try w.print("{s} 0x{x:0>8}", .{ op, (pc & 0xf0000000) + a.imm * 4 });
 }
 fn fmt_jr(w: anytype, op: []const u8, a: RTypeArgs) !void {
     try w.print("{s} {}", .{ op, fmt_reg(a.rs) });
 }
 fn fmt_jalr(w: anytype, op: []const u8, a: RTypeArgs) !void {
     try w.print("{s} {}, {}", .{ op, fmt_reg(a.rd), fmt_reg(a.rs) });
+}
+fn fmt_mtc(w: anytype, op: []const u8, a: RTypeArgs) !void {
+    try w.print("{s} {}, {}", .{ op, fmt_reg(a.rt), a.rd[0] });
+}
+fn fmt_mfc(w: anytype, op: []const u8, a: RTypeArgs) !void {
+    try w.print("{s} {}, {}", .{ op, fmt_reg(a.rt), a.rd[0] });
 }
 
 pub fn fmt_inst(inst: ?Inst, pc: u32) FmtInst {
@@ -155,22 +173,22 @@ pub const FmtInst = struct {
             try writer.print("???", .{});
             return;
         };
-        // Pseudo opcodes
-        switch (inst) {
-            .sll => |a| {
-                if (a.rd[0] == 0 and a.rt[0] == 0 and a.imm == 0) {
-                    try writer.print("nop", .{});
-                    return;
-                }
-            },
-            .@"or" => |a| {
-                if (a.rt[0] == 0) {
-                    try writer.print("mov {}, {}", .{ fmt_reg(a.rd), fmt_reg(a.rs) });
-                    return;
-                }
-            },
-            else => {},
-        }
+        // Pseudo opcodes (not duckstation compatible)
+        // switch (inst) {
+        //     .sll => |a| {
+        //         if (a.rd[0] == 0 and a.rt[0] == 0 and a.imm == 0) {
+        //             try writer.print("nop", .{});
+        //             return;
+        //         }
+        //     },
+        //     .@"or" => |a| {
+        //         if (a.rt[0] == 0) {
+        //             try writer.print("mov {}, {}", .{ fmt_reg(a.rd), fmt_reg(a.rs) });
+        //             return;
+        //         }
+        //     },
+        //     else => {},
+        // }
 
         try switch (inst) {
             .lb => |a| fmt_i_ld_st_type(writer, "lb", a),
@@ -233,16 +251,16 @@ pub const FmtInst = struct {
             .brk => |a| fmt_r_type(writer, "brk", a),
             .lwc0 => |a| fmt_i_ld_st_type(writer, "lwc0", a),
             .swc0 => |a| fmt_i_ld_st_type(writer, "swc0", a),
-            .mtc0 => |a| fmt_r_type(writer, "mtc0", a),
-            .mfc0 => |a| fmt_r_type(writer, "mfc0", a),
+            .mtc0 => |a| fmt_mtc(writer, "mtc0", a),
+            .mfc0 => |a| fmt_mfc(writer, "mfc0", a),
             .ctc0 => |a| fmt_r_type(writer, "ctc0", a),
             .cfc0 => |a| fmt_r_type(writer, "cfc0", a),
             .bc0f => |a| fmt_i_type(writer, "bc0f", a),
             .bc0t => |a| fmt_i_type(writer, "bc0t", a),
             .lwc2 => |a| fmt_i_ld_st_type(writer, "lwc2", a),
             .swc2 => |a| fmt_i_ld_st_type(writer, "swc2", a),
-            .mtc2 => |a| fmt_r_type(writer, "mtc2", a),
-            .mfc2 => |a| fmt_r_type(writer, "mfc2", a),
+            .mtc2 => |a| fmt_mtc(writer, "mtc2", a),
+            .mfc2 => |a| fmt_mfc(writer, "mfc2", a),
             .ctc2 => |a| fmt_r_type(writer, "ctc2", a),
             .cfc2 => |a| fmt_r_type(writer, "cfc2", a),
             .bc2f => |a| fmt_i_type(writer, "bc2f", a),
@@ -257,5 +275,5 @@ pub const FmtInst = struct {
 };
 
 pub fn print_disasm(writer: anytype, pc: u32, inst_raw: u32, inst: ?Inst) !void {
-    writer.print("{x:0>8} : {x:0>8} {}\n", .{ pc, inst_raw, fmt_inst(inst, pc) }) catch @panic("write");
+    writer.print("{x:0>8}: {x:0>8} {}", .{ pc, inst_raw, fmt_inst(inst, pc) }) catch @panic("write");
 }

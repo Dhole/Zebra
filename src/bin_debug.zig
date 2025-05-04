@@ -196,7 +196,7 @@ fn parse_input(input: []const u8) !?Cmd {
     const cmd = it.next() orelse {
         return null;
     };
-    if (eql(u8, cmd, "h")) {
+    if (eql(u8, cmd, "h") or eql(u8, cmd, "help")) {
         return .help;
     } else if (eql(u8, cmd, "r")) {
         return .regs;
@@ -239,6 +239,7 @@ fn print_help(w: anytype) !void {
     try w.print(
         \\Commands:
         \\ h : Print help
+        \\ help : Print help
         \\ s (n) : Step `n` or 1 instruction
         \\ c : Continue runnig until the next breakpoint
         \\ r : Print CPU Registers

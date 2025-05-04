@@ -1,0 +1,45 @@
+# Medafen
+
+00000ca8 : af410004 sw at, 0x4(k0)
+- (108) = ec e1 00 a0 = a000e1ec
+- k0=a000e1fc
+
+## Writes to 108
+
+- bfc002b8: set to 0
+
+# Zebra
+
+00000ca8 : af410004 sw at, 0x4(k0)
+- (108) = 00 00 00 00 = 00000000
+- k0 = 3c1a0008
+
+# Duckstation
+
+bfc0482c : set A000E1EC to A0000108
+
+---
+
+load operations: lb, lbu, lh, lhu, lw
+100xxx
+
+cop load operations: mfc0, mfc2, cfc0, cfc2
+0100nn00000
+0100nn00010
+
+---
+
+Previously:
+
+86509 000031e0: 03e00008 jr ra                         ; ra=0x0000316c
+86510 000031e4: 27bd0028 addiu sp, sp, 40              ; sp=0x801ffce0, sp=0x801ffce0
+86511 0000316c: 14400003 bne v0, zero, 0x0000317c      ; v0=0x00006ee0, zero=0x00000000
+
+---
+
+This sequence doesn't work:
+lw t0, 0x74(sp)
+bne v0, zero, 0x00003388
+sw v0, 0x0(t0)
+
+The `lw` executes the `bne` in the delay slot, which executes the `sw` in the delay slot, so the `sw` doesn't see the result of `lw` :(

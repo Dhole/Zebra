@@ -149,6 +149,13 @@ const Cop0 = struct {
             else => std.debug.panic("TODO: cop0 set_r {} {x:0>8}", .{ idx[0], v }),
         }
     }
+
+    fn r(self: *Self, idx: RegIdx) u32 {
+        return switch (idx[0]) {
+            REG_SR => self.status_reg,
+            else => std.debug.panic("TODO: cop0 r {}", .{idx[0]}),
+        };
+    }
 };
 
 pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
@@ -251,6 +258,99 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             _ = self._step();
         }
 
+        fn dbg_trace(self: *Self, inst: Inst, inst_raw: u32) !void {
+            switch (inst) {
+                .j, .jal, .mfc0 => {
+                    // duckstation compatible
+                    try print_disasm(self.dbg_w, self.pc, inst_raw, inst);
+                    try self.dbg_w.print("\n", .{});
+                    return;
+                },
+                else => {},
+            }
+            var disasm_str = [_]u8{' '} ** 48;
+            var s = std.io.fixedBufferStream(disasm_str[0..]);
+            try print_disasm(s.writer(), self.pc, inst_raw, inst);
+            try self.dbg_w.print("{s} ; ", .{disasm_str});
+            // NOTE: Using 0x prefix in values to be duckstation compatible
+            switch (inst) {
+                // rd, rs, rt
+                .add, .addu, .sub, .subu, .slt, .sltu, .@"and", .@"or" => |a| try self.dbg_w.print(
+                    "{}=0x{x:0>8}, {}=0x{x:0>8}, {}=0x{x:0>8}",
+                    .{ fmt_reg(a.rd), self.r(a.rd), fmt_reg(a.rs), self.r(a.rs), fmt_reg(a.rt), self.r(a.rt) },
+                ),
+                // rt, rs
+                .addi, .addiu, .slti, .sltiu, .andi, .ori, .xori => |a| try self.dbg_w.print(
+                    "{}=0x{x:0>8}, {}=0x{x:0>8}",
+                    .{ fmt_reg(a.rt), self.r(a.rt), fmt_reg(a.rs), self.r(a.rs) },
+                ),
+                // rs, rt
+                .bne, .beq => |a| try self.dbg_w.print(
+                    "{}=0x{x:0>8}, {}=0x{x:0>8}",
+                    .{ fmt_reg(a.rs), self.r(a.rs), fmt_reg(a.rt), self.r(a.rt) },
+                ),
+                // rd, rt
+                .sll, .srl, .sra => |a| try self.dbg_w.print(
+                    "{}=0x{x:0>8}, {}=0x{x:0>8}",
+                    .{ fmt_reg(a.rd), self.r(a.rd), fmt_reg(a.rt), self.r(a.rt) },
+                ),
+                // rs
+                .bgtz, .bgez, .bltz, .blez => |a| try self.dbg_w.print("{}=0x{x:0>8}", .{ fmt_reg(a.rs), self.r(a.rs) }),
+                // rs
+                .jr => |a| try self.dbg_w.print("{}=0x{x:0>8}", .{ fmt_reg(a.rs), self.r(a.rs) }),
+                // r31
+                .jal => |_| try self.dbg_w.print("{}=0x{x:0>8}", .{ fmt_reg(.{31}), self.r(.{31}) }),
+                // rd, rs
+                .jalr => |a| try self.dbg_w.print(
+                    "{}=0x{x:0>8}, {}=0x{x:0>8}",
+                    .{ fmt_reg(a.rd), self.r(a.rd), fmt_reg(a.rs), self.r(a.rs) },
+                ),
+                // rt
+                .lui => |a| try self.dbg_w.print("{}=0x{x:0>8}", .{ fmt_reg(a.rt), self.r(a.rt) }),
+                // rd
+                .mtc0, .mtc2 => |a| try self.dbg_w.print("{}=0x{x:0>8}", .{ fmt_reg(a.rt), self.r(a.rt) }),
+                //
+                .j, .mfc0, .mfc2 => {},
+                .lw => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    const addr = self.r(a.rs) +% offset;
+                    const v = self.read(false, u32, addr);
+                    try self.dbg_w.print(
+                        "{}=0x{x:0>8}, addr=0x{x:0>8}[0x{x:0>8}]",
+                        .{ fmt_reg(a.rt), self.r(a.rt), addr, v },
+                    );
+                },
+                .lh => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    const addr = self.r(a.rs) +% offset;
+                    const v = self.read(false, u16, addr);
+                    try self.dbg_w.print(
+                        "{}=0x{x:0>8}, addr=0x{x:0>8}[0x{x:0>4}]",
+                        .{ fmt_reg(a.rt), self.r(a.rt), addr, v },
+                    );
+                },
+                .lb, .lbu => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    const addr = self.r(a.rs) +% offset;
+                    const v = self.read(false, u8, addr);
+                    try self.dbg_w.print(
+                        "{}=0x{x:0>8}, addr=0x{x:0>8}[0x{x:0>2}]",
+                        .{ fmt_reg(a.rt), self.r(a.rt), addr, v },
+                    );
+                },
+                .sw, .sh, .sb => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    const addr = self.r(a.rs) +% offset;
+                    try self.dbg_w.print(
+                        "{}=0x{x:0>8}, addr=0x{x:0>8}",
+                        .{ fmt_reg(a.rt), self.r(a.rt), addr },
+                    );
+                },
+                else => std.debug.panic("TODO dbg_trace {?}", .{inst}),
+            }
+            try self.dbg_w.print("\n", .{});
+        }
+
         // step and return the reg that has been written by the operation
         fn _step(self: *Self) struct { RegIdx, u32 } {
             // Fetch next instruction
@@ -258,7 +358,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             const inst = decode(inst_raw) orelse std.debug.panic("TODO: unknown inst {x:0>8}", .{inst_raw});
             if (self.cfg.dbg) {
                 if (self.dbg.trace_inst) {
-                    print_disasm(self.dbg_w, self.pc, inst_raw, inst) catch @panic("write");
+                    self.dbg_trace(inst, inst_raw) catch @panic("write");
                 }
                 if (!self.dbg._first_step) {
                     for (self.dbg.breaks.items) |addr| {
@@ -279,6 +379,29 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             self.set_r(dst_r, dst_v);
         }
 
+        // fn exec_load_delay_slot(self: *Self, rt: RegIdx, v: u32) struct { RegIdx, u32 } {
+        //     // TODO: decode next instruction and keep it in Self instead of fetching it again here.
+        //     const next_inst_raw = self.read(true, u32, self.pc);
+        //     const MASK_LOAD: u32 = 0b111000_00000_000000000000000000000;
+        //     const VALU_LOAD: u32 = 0b100000_00000_000000000000000000000;
+        //     const MASK_LDCP: u32 = 0b111100_11101_000000000000000000000;
+        //     const VALU_LDCP: u32 = 0b010000_00000_000000000000000000000;
+        //     // If the next instruction is a load, don't execute it via the load
+        //     // delay slot and let the next step handle it so that we don't
+        //     // delay register updates for more than 1 step.
+        //     if (((next_inst_raw & MASK_LOAD) == VALU_LOAD) or
+        //         ((next_inst_raw & MASK_LDCP) == VALU_LDCP))
+        //     {
+        //         // TODO: panic if the next instruction reads register rt
+        //         return .{ rt, v };
+        //     } else {
+        //         // Execute instruction in the load delay slot
+        //         const dst_r, const dst_v = self._step();
+        //         self.set_r(rt, v);
+        //         return .{ dst_r, dst_v };
+        //     }
+        // }
+
         // execute instruction and return the reg that needs to been written by the operation
         pub fn exec_no_write_regs(self: *Self, inst: Inst) struct { RegIdx, u32 } {
             var dst_r: RegIdx = .{0};
@@ -297,13 +420,13 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     self.pc +%= 4;
                 },
                 .add => |a| {
-                    const lhs: i32 = @bitCast(self.r(a.rs));
-                    const rhs: i32 = @bitCast(self.r(a.rt));
-                    const res, const ov = @addWithOverflow(lhs, rhs);
+                    const rs: i32 = @bitCast(self.r(a.rs));
+                    const rt: i32 = @bitCast(self.r(a.rt));
+                    const res, const ov = @addWithOverflow(rs, rt);
                     if (ov == 1) {
                         std.debug.panic("TODO: add overflow trap", .{});
                     }
-                    dst_r = a.rt;
+                    dst_r = a.rd;
                     dst_v = @bitCast(res);
                     self.pc +%= 4;
                 },
@@ -314,8 +437,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     self.pc +%= 4;
                 },
                 .addi => |a| {
-                    const lhs: i32 = @bitCast(self.r(a.rs));
-                    const res, const ov = @addWithOverflow(lhs, @as(i32, a.imm));
+                    const rs: i32 = @bitCast(self.r(a.rs));
+                    const res, const ov = @addWithOverflow(rs, @as(i32, a.imm));
                     if (ov == 1) {
                         std.debug.panic("TODO: addi overflow trap", .{});
                     }
@@ -323,9 +446,33 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     dst_v = @bitCast(res);
                     self.pc +%= 4;
                 },
+                .subu => |a| {
+                    dst_r = a.rd;
+                    dst_v = self.r(a.rs) -% self.r(a.rt);
+                    self.pc +%= 4;
+                },
+                .slt => |a| {
+                    const rs: i32 = @bitCast(self.r(a.rs));
+                    const rt: i32 = @bitCast(self.r(a.rt));
+                    dst_r = a.rd;
+                    dst_v = if (rs < rt) 1 else 0;
+                    self.pc +%= 4;
+                },
                 .sltu => |a| {
                     dst_r = a.rd;
                     dst_v = if (self.r(a.rs) < self.r(a.rt)) 1 else 0;
+                    self.pc +%= 4;
+                },
+                .slti => |a| {
+                    const rs: i32 = @bitCast(self.r(a.rs));
+                    dst_r = a.rt;
+                    dst_v = if (rs < @as(i32, a.imm)) 1 else 0;
+                    self.pc +%= 4;
+                },
+                .sltiu => |a| {
+                    const imm: u32 = @bitCast(@as(i32, a.imm));
+                    dst_r = a.rt;
+                    dst_v = if (self.r(a.rs) < imm) 1 else 0;
                     self.pc +%= 4;
                 },
                 .@"and" => |a| {
@@ -350,9 +497,16 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     dst_v = self.r(a.rs) | @as(u32, imm);
                     self.pc +%= 4;
                 },
+                // Shifts
                 .sll => |a| {
                     dst_r = a.rd;
                     dst_v = self.r(a.rt) << @intCast(a.imm);
+                    self.pc +%= 4;
+                },
+                .sra => |a| {
+                    dst_r = a.rd;
+                    const rt: i32 = @bitCast(self.r(a.rt));
+                    dst_v = @bitCast(rt >> @intCast(a.imm));
                     self.pc +%= 4;
                 },
                 // Load & Store
@@ -360,18 +514,20 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
                     const v_lw = self.read(false, u32, self.r(a.rs) +% offset);
                     self.pc +%= 4;
-                    // Execute instruction in the load delay slot
-                    dst_r, dst_v = self._step();
-                    self.set_r(a.rt, v_lw);
+                    dst_r, dst_v = self.exec_load_delay_slot(a.rt, v_lw);
                 },
                 .lb => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
                     const v_lw_i8: i8 = @bitCast(self.read(false, u8, self.r(a.rs) +% offset));
                     const v_lw: u32 = @bitCast(@as(i32, v_lw_i8));
                     self.pc +%= 4;
-                    // Execute instruction in the load delay slot
-                    dst_r, dst_v = self._step();
-                    self.set_r(a.rt, v_lw);
+                    dst_r, dst_v = self.exec_load_delay_slot(a.rt, v_lw);
+                },
+                .lbu => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    const v_lw = @as(u32, self.read(false, u8, self.r(a.rs) +% offset));
+                    self.pc +%= 4;
+                    dst_r, dst_v = self.exec_load_delay_slot(a.rt, v_lw);
                 },
                 .sw => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
@@ -411,29 +567,57 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     _ = self.step();
                     self.pc = new_pc;
                 },
+                .jalr => |a| {
+                    const new_pc = self.r(a.rs);
+                    self.set_r(a.rd, self.pc + 8);
+                    self.pc +%= 4;
+                    // Execute instruction in the branch delay slot
+                    _ = self.step();
+                    self.pc = new_pc;
+                },
                 .bne => |a| {
                     self.branch_cmp(self.r(a.rs) != self.r(a.rt), a.imm);
                 },
                 .beq => |a| {
                     self.branch_cmp(self.r(a.rs) == self.r(a.rt), a.imm);
                 },
-                // Other
-                .mtc0 => |a| {
-                    if (a.imm != 0) {
-                        std.debug.panic("TODO: mtc with sel={} at pc={x:0>8}", .{ a.imm, self.pc });
-                    }
-                    self.cop0.set_r(a.rd, self.r(a.rt));
-                    self.pc +%= 4;
+                .bgtz => |a| {
+                    const rs: i32 = @bitCast(self.r(a.rs));
+                    self.branch_cmp(rs > 0, a.imm);
                 },
+                .bgez => |a| {
+                    const rs: i32 = @bitCast(self.r(a.rs));
+                    self.branch_cmp(rs >= 0, a.imm);
+                },
+                .bltz => |a| {
+                    const rs: i32 = @bitCast(self.r(a.rs));
+                    self.branch_cmp(rs < 0, a.imm);
+                },
+                .blez => |a| {
+                    const rs: i32 = @bitCast(self.r(a.rs));
+                    self.branch_cmp(rs <= 0, a.imm);
+                },
+                // Other
                 .rfe => |a| {
                     _ = a;
                     std.debug.print("TODO: pc={x:0>8} rfe\n", .{self.pc});
                     self.pc +%= 4;
                 },
-                .mfc0 => |a| {
-                    _ = a;
+                .mtc0 => |a| {
+                    if (a.imm != 0) {
+                        std.debug.panic("TODO: mtc0 with sel={} at pc={x:0>8}", .{ a.imm, self.pc });
+                    }
+                    self.cop0.set_r(a.rd, self.r(a.rt));
                     self.pc +%= 4;
-                    // TODO
+                },
+                .mfc0 => |a| {
+                    if (a.imm != 0) {
+                        std.debug.panic("TODO: mfc0 with sel={} at pc={x:0>8}", .{ a.imm, self.pc });
+                    }
+                    const v_c0 = self.cop0.r(a.rd);
+                    self.pc +%= 4;
+
+                    dst_r, dst_v = self.exec_load_delay_slot(a.rt, v_c0);
                 },
                 .bc0f => |a| {
                     _ = a;
@@ -501,9 +685,14 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 return self.bios_read(T, paddr - ADDR_BIOS);
             } else if (ADDR_EXP_REG1 <= paddr and paddr < ADDR_EXP_REG1 + SIZE_EXP_REG1) {
                 std.debug.print("TODO: read {s} at EXP_REG1 {x:0>8}\n", .{ @typeName(T), addr });
-                return 0;
+                return switch (T) {
+                    u8 => 0xff,
+                    u16 => 0xffff,
+                    u32 => 0xffff_ffff,
+                    else => @compileError("invalid T"),
+                };
             } else if (ADDR_IO_PORTS <= paddr and paddr < ADDR_IO_PORTS + SIZE_IO_PORTS) {
-                return self.io_regs_read(T, paddr);
+                return self.io_regs_read(T, paddr - ADDR_IO_PORTS);
             } else if (ADDR_CACHECTL <= paddr and paddr < ADDR_CACHECTL + SIZE_CACHECTL) {
                 std.debug.print("TODO: read {s} at CACHECTL {x:0>8}\n", .{ @typeName(T), addr });
                 return 0;
@@ -539,7 +728,21 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     std.debug.print("io read {s} at {x:0>8}\n", .{ @typeName(T), addr + ADDR_IO_PORTS });
                 }
             }
-            std.debug.panic("TODO: io_regs_read addr {x:0>8}", .{addr});
+            switch (T) {
+                u8 => std.debug.panic("TODO: io_regs_read u8 addr {x:0>8}\n", .{addr}),
+                u16 => std.debug.panic("TODO: io_regs_read u16 addr {x:0>8}\n", .{addr}),
+                u32 => switch (addr) {
+                    I_STAT_ADDR => {
+                        std.debug.panic("TODO: io_regs_read u32 I_STAT_ADDR\n", .{});
+                    },
+                    I_MASK_ADDR => {
+                        std.debug.print("TODO: io_regs_read u32 I_MASK_ADDR\n", .{});
+                        return 0;
+                    },
+                    else => std.debug.panic("TODO: io_regs_read u32 addr {x:0>8}\n", .{addr}),
+                },
+                else => @compileError("invalid T"),
+            }
         }
 
         fn io_regs_write(self: *Self, comptime T: type, addr: u32, v: T) void {
@@ -553,7 +756,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     DTL_H2000_PSX_POST => {
                         std.debug.print("TODO: io_regs_write u8 DTL_H2000_PSX_POST value {x:0>8}\n", .{v});
                     },
-                    else => std.debug.print("TODO: io_regs_write u8 addr {x:0>8} value {x:0>2}\n", .{ addr, v }),
+                    else => std.debug.panic("TODO: io_regs_write u8 addr {x:0>8} value {x:0>2}\n", .{ addr, v }),
                 },
                 u16 => switch (addr) {
                     MAIN_VOL_LR_ADDR => {
@@ -568,9 +771,69 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     REV_VOL_LR_ADDR + 2 => {
                         std.debug.print("TODO: io_regs_write u16 REV_VOL_LR_ADDR+2 value {x:0>8}\n", .{v});
                     },
-                    else => std.debug.print("TODO: io_regs_write u16 addr {x:0>8} value {x:0>4}\n", .{ addr, v }),
+                    TIM0_CUR_CNT_VAL => {
+                        std.debug.print("TODO: io_regs_write u16 TIM0_CUR_CNT_VAL value {x:0>8}\n", .{v});
+                    },
+                    TIM0_CUR_CNT_VAL + 2 => {
+                        std.debug.print("TODO: io_regs_write u16 TIM0_CUR_CNT_VAL+2 value {x:0>8}\n", .{v});
+                    },
+                    TIM0_CNT_MODE_ADDR => {
+                        std.debug.print("TODO: io_regs_write u16 TIM0_CNT_MODE_ADDR value {x:0>8}\n", .{v});
+                    },
+                    TIM0_CNT_MODE_ADDR + 2 => {
+                        std.debug.print("TODO: io_regs_write u16 TIM0_CNT_MODE_ADDR+2 value {x:0>8}\n", .{v});
+                    },
+                    TIM0_CNT_TAR_VAL => {
+                        std.debug.print("TODO: io_regs_write u16 TIM0_CNT_TAR_VAL value {x:0>8}\n", .{v});
+                    },
+                    TIM0_CNT_TAR_VAL + 2 => {
+                        std.debug.print("TODO: io_regs_write u16 TIM0_CNT_TAR_VAL+2 value {x:0>8}\n", .{v});
+                    },
+                    TIM1_CUR_CNT_VAL => {
+                        std.debug.print("TODO: io_regs_write u16 TIM1_CUR_CNT_VAL value {x:0>8}\n", .{v});
+                    },
+                    TIM1_CUR_CNT_VAL + 2 => {
+                        std.debug.print("TODO: io_regs_write u16 TIM1_CUR_CNT_VAL+2 value {x:0>8}\n", .{v});
+                    },
+                    TIM1_CNT_MODE_ADDR => {
+                        std.debug.print("TODO: io_regs_write u16 TIM1_CNT_MODE_ADDR value {x:0>8}\n", .{v});
+                    },
+                    TIM1_CNT_MODE_ADDR + 2 => {
+                        std.debug.print("TODO: io_regs_write u16 TIM1_CNT_MODE_ADDR+2 value {x:0>8}\n", .{v});
+                    },
+                    TIM1_CNT_TAR_VAL => {
+                        std.debug.print("TODO: io_regs_write u16 TIM1_CNT_TAR_VAL value {x:0>8}\n", .{v});
+                    },
+                    TIM1_CNT_TAR_VAL + 2 => {
+                        std.debug.print("TODO: io_regs_write u16 TIM1_CNT_TAR_VAL+2 value {x:0>8}\n", .{v});
+                    },
+                    TIM2_CUR_CNT_VAL => {
+                        std.debug.print("TODO: io_regs_write u16 TIM2_CUR_CNT_VAL value {x:0>8}\n", .{v});
+                    },
+                    TIM2_CUR_CNT_VAL + 2 => {
+                        std.debug.print("TODO: io_regs_write u16 TIM2_CUR_CNT_VAL+2 value {x:0>8}\n", .{v});
+                    },
+                    TIM2_CNT_MODE_ADDR => {
+                        std.debug.print("TODO: io_regs_write u16 TIM2_CNT_MODE_ADDR value {x:0>8}\n", .{v});
+                    },
+                    TIM2_CNT_MODE_ADDR + 2 => {
+                        std.debug.print("TODO: io_regs_write u16 TIM2_CNT_MODE_ADDR+2 value {x:0>8}\n", .{v});
+                    },
+                    TIM2_CNT_TAR_VAL => {
+                        std.debug.print("TODO: io_regs_write u16 TIM2_CNT_TAR_VAL value {x:0>8}\n", .{v});
+                    },
+                    TIM2_CNT_TAR_VAL + 2 => {
+                        std.debug.print("TODO: io_regs_write u16 TIM2_CNT_TAR_VAL+2 value {x:0>8}\n", .{v});
+                    },
+                    else => std.debug.panic("TODO: io_regs_write u16 addr {x:0>8} value {x:0>4}\n", .{ addr, v }),
                 },
                 u32 => switch (addr) {
+                    I_STAT_ADDR => {
+                        std.debug.print("TODO: io_regs_write u32 I_STAT_ADDR value {x:0>8}\n", .{v});
+                    },
+                    I_MASK_ADDR => {
+                        std.debug.print("TODO: io_regs_write u32 I_MASK_ADDR value {x:0>8}\n", .{v});
+                    },
                     EXP1_BASE_ADDR => {
                         if (v != 0x1f000000) {
                             std.debug.panic("Bad expansion 1 base address: {x:0>8}", .{v});
@@ -608,7 +871,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     MAIN_VOL_LR_ADDR => {
                         std.debug.print("TODO: io_regs_write u32 MAIN_VOL_LR_ADDR value {x:0>8}\n", .{v});
                     },
-                    else => std.debug.print("TODO: io_regs_write u32 addr {x:0>8} value {x:0>8}\n", .{ addr, v }),
+                    else => std.debug.panic("TODO: io_regs_write u32 addr {x:0>8} value {x:0>8}\n", .{ addr, v }),
                 },
                 else => @compileError("invalid T"),
             }
@@ -622,15 +885,15 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
 
 // Memory Control 1
 
-const EXP1_BASE_ADDR: u32 = 0x0000; // 4 Expansion 1 Base Address (usually 1F000000h)
-const EXP2_BASE_ADDR: u32 = 0x0004; // 4 Expansion 2 Base Address (usually 1F802000h)
-const EXP1_DELAY_ADDR: u32 = 0x0008; // 4 Expansion 1 Delay/Size (usually 0013243Fh; 512Kbytes 8bit-bus)
-const EXP3_DELAY_ADDR: u32 = 0x000c; // 4 Expansion 3 Delay/Size (usually 00003022h; 1 byte)
-const BIOS_ROM_ADDR: u32 = 0x0010; // 4 BIOS ROM Delay/Size (usually 0013243Fh; 512Kbytes 8bit-bus)
-const SPU_DELAY_ADDR: u32 = 0x0014; // 4 SPU_DELAY Delay/Size (usually 200931E1h)
-const CDROM_DELAY_ADDR: u32 = 0x0018; // 4 CDROM_DELAY Delay/Size (usually 00020843h or 00020943h)
-const EXP2_DELAY_ADDR: u32 = 0x001c; // 4 Expansion 2 Delay/Size (usually 00070777h; 128-bytes 8bit-bus)
-const COM_DELAY_ADDR: u32 = 0x0020; // 4 COM_DELAY / COMMON_DELAY (00031125h or 0000132Ch or 00001325h)
+const EXP1_BASE_ADDR: u32 = 0x0000; // 1f801000 4 Expansion 1 Base Address (usually 1F000000h)
+const EXP2_BASE_ADDR: u32 = 0x0004; // 1f801004 4 Expansion 2 Base Address (usually 1F802000h)
+const EXP1_DELAY_ADDR: u32 = 0x0008; // 1f801008 4 Expansion 1 Delay/Size (usually 0013243Fh; 512Kbytes 8bit-bus)
+const EXP3_DELAY_ADDR: u32 = 0x000c; // 1f80100c 4 Expansion 3 Delay/Size (usually 00003022h; 1 byte)
+const BIOS_ROM_ADDR: u32 = 0x0010; // 1f801010 4 BIOS ROM Delay/Size (usually 0013243Fh; 512Kbytes 8bit-bus)
+const SPU_DELAY_ADDR: u32 = 0x0014; // 1f801014 4 SPU_DELAY Delay/Size (usually 200931E1h)
+const CDROM_DELAY_ADDR: u32 = 0x0018; // 1f801018 4 CDROM_DELAY Delay/Size (usually 00020843h or 00020943h)
+const EXP2_DELAY_ADDR: u32 = 0x001c; // 1f80101c 4 Expansion 2 Delay/Size (usually 00070777h; 128-bytes 8bit-bus)
+const COM_DELAY_ADDR: u32 = 0x0020; // 1f801020 4 COM_DELAY / COMMON_DELAY (00031125h or 0000132Ch or 00001325h)
 
 // Peripheral I/O Ports
 
@@ -648,12 +911,12 @@ const COM_DELAY_ADDR: u32 = 0x0020; // 4 COM_DELAY / COMMON_DELAY (00031125h or 
 
 // Memory Control 2
 
-const RAM_SIZE_ADDR: u32 = 0x0060; // 4/2 RAM_SIZE (usually 00000B88h; 2MB RAM mirrored in first 8MB)
+const RAM_SIZE_ADDR: u32 = 0x0060; // 1f801060 4/2 RAM_SIZE (usually 00000B88h; 2MB RAM mirrored in first 8MB)
 
 // Interrupt Control
 
-//   1F801070h 2    I_STAT - Interrupt status register
-//   1F801074h 2    I_MASK - Interrupt mask register
+const I_STAT_ADDR: u32 = 0x0070; // 1f801070 2 I_STAT - Interrupt status register
+const I_MASK_ADDR: u32 = 0x0074; // 1f801074 2 I_MASK - Interrupt mask register
 
 // DMA Registers
 
@@ -671,15 +934,15 @@ const RAM_SIZE_ADDR: u32 = 0x0060; // 4/2 RAM_SIZE (usually 00000B88h; 2MB RAM m
 
 // Timers (aka Root counters)
 
-//   1F801100h 2    Timer 0 Current Counter Value (R/W)  ;\
-//   1F801104h 2    Timer 0 Counter Mode          (R/W)  ; Dotclock
-//   1F801108h 2    Timer 0 Counter Target Value  (R/W)  ;/
-//   1F801110h 2    Timer 1 Current Counter Value (R/W)  ;\
-//   1F801114h 2    Timer 1 Counter Mode          (R/W)  ; Horizontal Retrace
-//   1F801118h 2    Timer 1 Counter Target Value  (R/W)  ;/
-//   1F801120h 2    Timer 2 Current Counter Value (R/W)  ;\
-//   1F801124h 2    Timer 2 Counter Mode          (R/W)  ; 1/8 system clock
-//   1F801128h 2    Timer 2 Counter Target Value  (R/W)  ;/
+const TIM0_CUR_CNT_VAL: u32 = 0x0100; //   1f801100 2 Timer 0 Current Counter Value (R/W)  ;\
+const TIM0_CNT_MODE_ADDR: u32 = 0x0104; // 1f801104 2 Timer 0 Counter Mode          (R/W)  ; Dotclock
+const TIM0_CNT_TAR_VAL: u32 = 0x0108; //   1f801108 2 Timer 0 Counter Target Value  (R/W)  ;/
+const TIM1_CUR_CNT_VAL: u32 = 0x0110; //   1f801110 2 Timer 1 Current Counter Value (R/W)  ;\
+const TIM1_CNT_MODE_ADDR: u32 = 0x0114; // 1f801114 2 Timer 1 Counter Mode          (R/W)  ; Horizontal Retrace
+const TIM1_CNT_TAR_VAL: u32 = 0x0118; //   1f801118 2 Timer 1 Counter Target Value  (R/W)  ;/
+const TIM2_CUR_CNT_VAL: u32 = 0x0120; //   1f801120 2 Timer 2 Current Counter Value (R/W)  ;\
+const TIM2_CNT_MODE_ADDR: u32 = 0x0124; // 1f801124 2 Timer 2 Counter Mode          (R/W)  ; 1/8 system clock
+const TIM2_CNT_TAR_VAL: u32 = 0x0128; //   1f801128 2 Timer 2 Counter Target Value  (R/W)  ;/
 
 // CDROM Registers (Address.Read/Write.Index)
 
@@ -728,8 +991,8 @@ const RAM_SIZE_ADDR: u32 = 0x0060; // 4/2 RAM_SIZE (usually 00000B88h; 2MB RAM m
 
 // SPU Control Registers
 
-const MAIN_VOL_LR_ADDR: u32 = 0x0d80; // 4 Main Volume Left/Right
-const REV_VOL_LR_ADDR: u32 = 0x0d84; // 4 Reverb Output Volume Left/Right
+const MAIN_VOL_LR_ADDR: u32 = 0x0d80; // 1f801d80 4 Main Volume Left/Right
+const REV_VOL_LR_ADDR: u32 = 0x0d84; // 1f801d84 4 Reverb Output Volume Left/Right
 //   1F801D88h 4  Voice 0..23 Key ON (Start Attack/Decay/Sustain) (W)
 //   1F801D8Ch 4  Voice 0..23 Key OFF (Start Release) (W)
 //   1F801D90h 4  Voice 0..23 Channel FM (pitch lfo) mode (R/W)
@@ -824,8 +1087,8 @@ const REV_VOL_LR_ADDR: u32 = 0x0d84; // 4 Reverb Output Volume Left/Right
 //   1F802004h 2 DTL-H2000: Whatever 16bit data ?
 //   1F802030h 1/4 DTL-H2000: Secondary IRQ10 Flags
 //   1F802032h 1 DTL-H2000: Whatever IRQ Control ?
-const DTL_H2000_BOOTMODE_ADDR: u32 = 0x1040; // 1 DTL-H2000: Bootmode "Dip switches" (R)
-const DTL_H2000_PSX_POST: u32 = 0x1041; // 1 PSX: POST (external 7 segment display, indicate BIOS boot status)
+const DTL_H2000_BOOTMODE_ADDR: u32 = 0x1040; // 1f802040 1 DTL-H2000: Bootmode "Dip switches" (R)
+const DTL_H2000_PSX_POST: u32 = 0x1041; // 1f802041 1 PSX: POST (external 7 segment display, indicate BIOS boot status)
 //   1F802042h 1 DTL-H2000: POST/LED (similar to POST) (other addr, 2-digit wide)   1F802070h 1 PS2: POST2 (similar to POST, but PS2 BIOS uses this address)
 
 // Expansion Region 2 - Nocash Emulation Expansion
