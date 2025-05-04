@@ -168,6 +168,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         pc: u32, // Program Counter
         hi: u32, // Multiplication 64 bit high result or division remainder
         lo: u32, // Multiplication 64 bit low result or division quotient
+        delay_dst_r: RegIdx = .{0}, // register to update from a load delay
+        delay_dst_v: u32 = 0, // value from a load delay
         bios: []const u8,
         ram: []u8,
         allocator: mem.Allocator,
@@ -255,7 +257,27 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         }
 
         pub fn step(self: *Self) void {
-            _ = self._step();
+            // Fetch next instruction
+            const inst_raw = self.read(true, u32, self.pc);
+            const inst = decode(inst_raw) orelse std.debug.panic("TODO: unknown inst {x:0>8}", .{inst_raw});
+            if (self.cfg.dbg) {
+                if (self.dbg.trace_inst) {
+                    self.dbg_trace(inst, inst_raw) catch @panic("write");
+                }
+                if (!self.dbg._first_step) {
+                    for (self.dbg.breaks.items) |addr| {
+                        if (addr == self.pc) {
+                            self.dbg._break = true;
+                            return;
+                        }
+                    }
+                }
+            }
+            const dst_r, const dst_v, const delay_dst_r, const delay_dst_v = self.exec_no_write_regs(inst);
+            self.set_r(dst_r, dst_v);
+            self.set_r(self.delay_dst_r, self.delay_dst_v);
+            self.delay_dst_r = delay_dst_r;
+            self.delay_dst_v = delay_dst_v;
         }
 
         fn dbg_trace(self: *Self, inst: Inst, inst_raw: u32) !void {
@@ -351,29 +373,6 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             try self.dbg_w.print("\n", .{});
         }
 
-        // step and return the reg that has been written by the operation
-        fn _step(self: *Self) struct { RegIdx, u32 } {
-            // Fetch next instruction
-            const inst_raw = self.read(true, u32, self.pc);
-            const inst = decode(inst_raw) orelse std.debug.panic("TODO: unknown inst {x:0>8}", .{inst_raw});
-            if (self.cfg.dbg) {
-                if (self.dbg.trace_inst) {
-                    self.dbg_trace(inst, inst_raw) catch @panic("write");
-                }
-                if (!self.dbg._first_step) {
-                    for (self.dbg.breaks.items) |addr| {
-                        if (addr == self.pc) {
-                            self.dbg._break = true;
-                            return .{ .{0}, 0 };
-                        }
-                    }
-                }
-            }
-            const dst_r, const dst_v = self.exec_no_write_regs(inst);
-            self.set_r(dst_r, dst_v);
-            return .{ dst_r, dst_v };
-        }
-
         pub fn exec(self: *Self, inst: Inst) void {
             const dst_r, const dst_v = self.exec_no_write_regs(inst);
             self.set_r(dst_r, dst_v);
@@ -403,9 +402,11 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         // }
 
         // execute instruction and return the reg that needs to been written by the operation
-        pub fn exec_no_write_regs(self: *Self, inst: Inst) struct { RegIdx, u32 } {
+        pub fn exec_no_write_regs(self: *Self, inst: Inst) struct { RegIdx, u32, RegIdx, u32 } {
             var dst_r: RegIdx = .{0};
             var dst_v: u32 = 0;
+            var delay_dst_r: RegIdx = .{0};
+            var delay_dst_v: u32 = 0;
             switch (inst) {
                 // ALU
                 .lui => |a| {
@@ -514,20 +515,23 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
                     const v_lw = self.read(false, u32, self.r(a.rs) +% offset);
                     self.pc +%= 4;
-                    dst_r, dst_v = self.exec_load_delay_slot(a.rt, v_lw);
+                    delay_dst_r = a.rt;
+                    delay_dst_v = v_lw;
                 },
                 .lb => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
                     const v_lw_i8: i8 = @bitCast(self.read(false, u8, self.r(a.rs) +% offset));
                     const v_lw: u32 = @bitCast(@as(i32, v_lw_i8));
                     self.pc +%= 4;
-                    dst_r, dst_v = self.exec_load_delay_slot(a.rt, v_lw);
+                    delay_dst_r = a.rt;
+                    delay_dst_v = v_lw;
                 },
                 .lbu => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
                     const v_lw = @as(u32, self.read(false, u8, self.r(a.rs) +% offset));
                     self.pc +%= 4;
-                    dst_r, dst_v = self.exec_load_delay_slot(a.rt, v_lw);
+                    delay_dst_r = a.rt;
+                    delay_dst_v = v_lw;
                 },
                 .sw => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
@@ -617,7 +621,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     const v_c0 = self.cop0.r(a.rd);
                     self.pc +%= 4;
 
-                    dst_r, dst_v = self.exec_load_delay_slot(a.rt, v_c0);
+                    delay_dst_r = a.rt;
+                    delay_dst_v = v_c0;
                 },
                 .bc0f => |a| {
                     _ = a;
@@ -626,14 +631,18 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 },
                 else => std.debug.panic("TODO: inst {?}", .{inst}),
             }
-            return .{ dst_r, dst_v };
+            return .{ dst_r, dst_v, delay_dst_r, delay_dst_v };
         }
 
         fn branch_cmp(self: *Self, cmp_result: bool, imm: i16) void {
             self.pc +%= 4;
             if (cmp_result) {
                 const pc = self.pc;
-                // Execute instruction in the branch delay slot
+                // Execute instruction in the branch delay slot.  Before that
+                // apply the delay register update if any.
+                self.set_r(self.delay_dst_r, self.delay_dst_v);
+                self.delay_dst_r = .{0};
+                self.delay_dst_v = 0;
                 self.step();
                 const offset: u32 = @bitCast(@as(i32, imm * 4));
                 self.pc = pc +% offset;
