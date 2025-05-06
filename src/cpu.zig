@@ -128,13 +128,17 @@ const Cop0 = struct {
     const REG_EPC = 14; // Return Address from Trap (R)
     const REG_PRID = 15; // Processor ID (R)
 
-    status_reg: u32, // SR
+    status_reg: u32, // 12=SR
+    cause: u32, // 13=CAUSE
+    exception_pc: u32, // 14=EPC
+    //
 
     const Self = @This();
 
     fn init() Self {
         return Self{
             .status_reg = 0,
+            .exception_pc = 0,
         };
     }
 
@@ -166,6 +170,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         regs: [32]u32, // Registers
         cop0: Cop0,
         pc: u32, // Program Counter
+        next_pc: u32, // Scheduled next Program Counter
         hi: u32, // Multiplication 64 bit high result or division remainder
         lo: u32, // Multiplication 64 bit low result or division quotient
         delay_dst_r: RegIdx = .{0}, // register to update from a load delay
@@ -188,13 +193,15 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             @memset(ram, 0);
             const bios_copy = try allocator.alloc(u8, SIZE_BIOS);
             std.mem.copyForwards(u8, bios_copy, bios);
+            const pc = VADDR_RESET;
             const self = Self{
                 .dbg_w = dbg_writer,
                 .cfg = cfg,
                 .dbg = Dbg.init(allocator),
                 .regs = [_]u32{0} ** 32,
                 .cop0 = Cop0.init(),
-                .pc = VADDR_RESET,
+                .pc = pc,
+                .next_pc = pc +% 4,
                 .lo = 0,
                 .hi = 0,
                 .bios = bios_copy,
@@ -311,6 +318,11 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     "{}=0x{x:0>8}, {}=0x{x:0>8}",
                     .{ fmt_reg(a.rs), self.r(a.rs), fmt_reg(a.rt), self.r(a.rt) },
                 ),
+                // rs, rt
+                .div, .divu => |a| try self.dbg_w.print(
+                    "{}=0x{x:0>8}, {}=0x{x:0>8}",
+                    .{ fmt_reg(a.rs), self.r(a.rs), fmt_reg(a.rt), self.r(a.rt) },
+                ),
                 // rd, rt
                 .sll, .srl, .sra => |a| try self.dbg_w.print(
                     "{}=0x{x:0>8}, {}=0x{x:0>8}",
@@ -331,6 +343,17 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .lui => |a| try self.dbg_w.print("{}=0x{x:0>8}", .{ fmt_reg(a.rt), self.r(a.rt) }),
                 // rd
                 .mtc0, .mtc2 => |a| try self.dbg_w.print("{}=0x{x:0>8}", .{ fmt_reg(a.rt), self.r(a.rt) }),
+                // rd, lo
+                .mflo => |a| try self.dbg_w.print(
+                    "{}=0x{x:0>8}, lo=0x{x:0>8}",
+                    .{ fmt_reg(a.rd), self.r(a.rd), self.lo },
+                ),
+                // rd, hi
+                .mfhi => |a| try self.dbg_w.print(
+                    "{}=0x{x:0>8}, hi=0x{x:0>8}",
+                    .{ fmt_reg(a.rd), self.r(a.rd), self.hi },
+                ),
+                //
                 //
                 .j, .mfc0, .mfc2 => {},
                 .lw => |a| {
@@ -377,29 +400,6 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             const dst_r, const dst_v = self.exec_no_write_regs(inst);
             self.set_r(dst_r, dst_v);
         }
-
-        // fn exec_load_delay_slot(self: *Self, rt: RegIdx, v: u32) struct { RegIdx, u32 } {
-        //     // TODO: decode next instruction and keep it in Self instead of fetching it again here.
-        //     const next_inst_raw = self.read(true, u32, self.pc);
-        //     const MASK_LOAD: u32 = 0b111000_00000_000000000000000000000;
-        //     const VALU_LOAD: u32 = 0b100000_00000_000000000000000000000;
-        //     const MASK_LDCP: u32 = 0b111100_11101_000000000000000000000;
-        //     const VALU_LDCP: u32 = 0b010000_00000_000000000000000000000;
-        //     // If the next instruction is a load, don't execute it via the load
-        //     // delay slot and let the next step handle it so that we don't
-        //     // delay register updates for more than 1 step.
-        //     if (((next_inst_raw & MASK_LOAD) == VALU_LOAD) or
-        //         ((next_inst_raw & MASK_LDCP) == VALU_LDCP))
-        //     {
-        //         // TODO: panic if the next instruction reads register rt
-        //         return .{ rt, v };
-        //     } else {
-        //         // Execute instruction in the load delay slot
-        //         const dst_r, const dst_v = self._step();
-        //         self.set_r(rt, v);
-        //         return .{ dst_r, dst_v };
-        //     }
-        // }
 
         // execute instruction and return the reg that needs to been written by the operation
         pub fn exec_no_write_regs(self: *Self, inst: Inst) struct { RegIdx, u32, RegIdx, u32 } {
@@ -498,10 +498,46 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     dst_v = self.r(a.rs) | @as(u32, imm);
                     self.pc +%= 4;
                 },
+                .div => |a| {
+                    const rs: i32 = @bitCast(self.r(a.rs));
+                    const rt: i32 = @bitCast(self.r(a.rt));
+                    if (rt == 0) {
+                        self.hi = @bitCast(rs);
+                        if (rs >= 0) {
+                            self.lo = 0xffff_ffff; // -1
+                        } else {
+                            self.lo = 0x0000_0001; // +1
+                        }
+                    } else if (rs == 0x8000_0000 and rt == 0xffff_ffff) {
+                        self.hi = 0;
+                        self.lo = 0x8000_0000;
+                    } else {
+                        self.hi = @bitCast(@rem(rs, rt));
+                        self.lo = @bitCast(@divTrunc(rs, rt));
+                    }
+                    self.pc +%= 4;
+                },
+                .divu => |a| {
+                    const rs = self.r(a.rs);
+                    const rt = self.r(a.rt);
+                    if (rt == 0) {
+                        self.hi = @bitCast(rs);
+                        self.lo = 0xffff_ffff;
+                    } else {
+                        self.hi = @bitCast(rs % rt);
+                        self.lo = @bitCast(rs / rt);
+                    }
+                    self.pc +%= 4;
+                },
                 // Shifts
                 .sll => |a| {
                     dst_r = a.rd;
                     dst_v = self.r(a.rt) << @intCast(a.imm);
+                    self.pc +%= 4;
+                },
+                .srl => |a| {
+                    dst_r = a.rd;
+                    dst_v = self.r(a.rt) >> @intCast(a.imm);
                     self.pc +%= 4;
                 },
                 .sra => |a| {
@@ -605,6 +641,16 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .rfe => |a| {
                     _ = a;
                     std.debug.print("TODO: pc={x:0>8} rfe\n", .{self.pc});
+                    self.pc +%= 4;
+                },
+                .mflo => |a| {
+                    dst_r = a.rd;
+                    dst_v = self.lo;
+                    self.pc +%= 4;
+                },
+                .mfhi => |a| {
+                    dst_r = a.rd;
+                    dst_v = self.hi;
                     self.pc +%= 4;
                 },
                 .mtc0 => |a| {
