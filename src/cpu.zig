@@ -138,6 +138,7 @@ const Cop0 = struct {
     fn init() Self {
         return Self{
             .status_reg = 0,
+            .cause = 0,
             .exception_pc = 0,
         };
     }
@@ -280,6 +281,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     }
                 }
             }
+            self.pc = self.next_pc;
+            self.next_pc = self.pc +% 4;
             const dst_r, const dst_v, const delay_dst_r, const delay_dst_v = self.exec_no_write_regs(inst);
             self.set_r(dst_r, dst_v);
             self.set_r(self.delay_dst_r, self.delay_dst_v);
@@ -396,6 +399,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             try self.dbg_w.print("\n", .{});
         }
 
+        // NOTE: This may be buggy after so many changes in `fn step`
         pub fn exec(self: *Self, inst: Inst) void {
             const dst_r, const dst_v = self.exec_no_write_regs(inst);
             self.set_r(dst_r, dst_v);
@@ -413,12 +417,10 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     const imm: u16 = @bitCast(a.imm);
                     dst_r = a.rt;
                     dst_v = @as(u32, imm) << 16;
-                    self.pc +%= 4;
                 },
                 .addu => |a| {
                     dst_r = a.rd;
                     dst_v = self.r(a.rs) +% self.r(a.rt);
-                    self.pc +%= 4;
                 },
                 .add => |a| {
                     const rs: i32 = @bitCast(self.r(a.rs));
@@ -429,13 +431,11 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     }
                     dst_r = a.rd;
                     dst_v = @bitCast(res);
-                    self.pc +%= 4;
                 },
                 .addiu => |a| {
                     const imm: u32 = @bitCast(@as(i32, a.imm));
                     dst_r = a.rt;
                     dst_v = self.r(a.rs) +% imm;
-                    self.pc +%= 4;
                 },
                 .addi => |a| {
                     const rs: i32 = @bitCast(self.r(a.rs));
@@ -445,58 +445,48 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     }
                     dst_r = a.rt;
                     dst_v = @bitCast(res);
-                    self.pc +%= 4;
                 },
                 .subu => |a| {
                     dst_r = a.rd;
                     dst_v = self.r(a.rs) -% self.r(a.rt);
-                    self.pc +%= 4;
                 },
                 .slt => |a| {
                     const rs: i32 = @bitCast(self.r(a.rs));
                     const rt: i32 = @bitCast(self.r(a.rt));
                     dst_r = a.rd;
                     dst_v = if (rs < rt) 1 else 0;
-                    self.pc +%= 4;
                 },
                 .sltu => |a| {
                     dst_r = a.rd;
                     dst_v = if (self.r(a.rs) < self.r(a.rt)) 1 else 0;
-                    self.pc +%= 4;
                 },
                 .slti => |a| {
                     const rs: i32 = @bitCast(self.r(a.rs));
                     dst_r = a.rt;
                     dst_v = if (rs < @as(i32, a.imm)) 1 else 0;
-                    self.pc +%= 4;
                 },
                 .sltiu => |a| {
                     const imm: u32 = @bitCast(@as(i32, a.imm));
                     dst_r = a.rt;
                     dst_v = if (self.r(a.rs) < imm) 1 else 0;
-                    self.pc +%= 4;
                 },
                 .@"and" => |a| {
                     dst_r = a.rd;
                     dst_v = self.r(a.rs) & self.r(a.rt);
-                    self.pc +%= 4;
                 },
                 .andi => |a| {
                     const imm: u16 = @bitCast(a.imm);
                     dst_r = a.rt;
                     dst_v = self.r(a.rs) & @as(u32, imm);
-                    self.pc +%= 4;
                 },
                 .@"or" => |a| {
                     dst_r = a.rd;
                     dst_v = self.r(a.rs) | self.r(a.rt);
-                    self.pc +%= 4;
                 },
                 .ori => |a| {
                     const imm: u16 = @bitCast(a.imm);
                     dst_r = a.rt;
                     dst_v = self.r(a.rs) | @as(u32, imm);
-                    self.pc +%= 4;
                 },
                 .div => |a| {
                     const rs: i32 = @bitCast(self.r(a.rs));
@@ -515,7 +505,6 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                         self.hi = @bitCast(@rem(rs, rt));
                         self.lo = @bitCast(@divTrunc(rs, rt));
                     }
-                    self.pc +%= 4;
                 },
                 .divu => |a| {
                     const rs = self.r(a.rs);
@@ -527,30 +516,25 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                         self.hi = @bitCast(rs % rt);
                         self.lo = @bitCast(rs / rt);
                     }
-                    self.pc +%= 4;
                 },
                 // Shifts
                 .sll => |a| {
                     dst_r = a.rd;
                     dst_v = self.r(a.rt) << @intCast(a.imm);
-                    self.pc +%= 4;
                 },
                 .srl => |a| {
                     dst_r = a.rd;
                     dst_v = self.r(a.rt) >> @intCast(a.imm);
-                    self.pc +%= 4;
                 },
                 .sra => |a| {
                     dst_r = a.rd;
                     const rt: i32 = @bitCast(self.r(a.rt));
                     dst_v = @bitCast(rt >> @intCast(a.imm));
-                    self.pc +%= 4;
                 },
                 // Load & Store
                 .lw => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
                     const v_lw = self.read(false, u32, self.r(a.rs) +% offset);
-                    self.pc +%= 4;
                     delay_dst_r = a.rt;
                     delay_dst_v = v_lw;
                 },
@@ -558,62 +542,41 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
                     const v_lw_i8: i8 = @bitCast(self.read(false, u8, self.r(a.rs) +% offset));
                     const v_lw: u32 = @bitCast(@as(i32, v_lw_i8));
-                    self.pc +%= 4;
                     delay_dst_r = a.rt;
                     delay_dst_v = v_lw;
                 },
                 .lbu => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
                     const v_lw = @as(u32, self.read(false, u8, self.r(a.rs) +% offset));
-                    self.pc +%= 4;
                     delay_dst_r = a.rt;
                     delay_dst_v = v_lw;
                 },
                 .sw => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
                     self.write(u32, self.r(a.rs) +% offset, self.r(a.rt));
-                    self.pc +%= 4;
                 },
                 .sh => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
                     self.write(u16, self.r(a.rs) +% offset, @intCast(self.r(a.rt) & 0xffff));
-                    self.pc +%= 4;
                 },
                 .sb => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
                     self.write(u8, self.r(a.rs) +% offset, @intCast(self.r(a.rt) & 0xff));
-                    self.pc +%= 4;
                 },
                 // Jump & Branch
                 .j => |a| {
-                    const new_pc = (self.pc & 0xf0000000) + a.imm * 4;
-                    self.pc +%= 4;
-                    // Execute instruction in the branch delay slot
-                    _ = self.step();
-                    self.pc = new_pc;
+                    self.next_pc = ((self.pc -% 4) & 0xf0000000) + a.imm * 4;
                 },
                 .jr => |a| {
-                    const new_pc = self.r(a.rs);
-                    self.pc +%= 4;
-                    // Execute instruction in the branch delay slot
-                    self.step();
-                    self.pc = new_pc;
+                    self.next_pc = self.r(a.rs);
                 },
                 .jal => |a| {
-                    const new_pc = (self.pc & 0xf0000000) + a.imm * 4;
-                    self.set_r(.{31}, self.pc + 8);
-                    self.pc +%= 4;
-                    // Execute instruction in the branch delay slot
-                    _ = self.step();
-                    self.pc = new_pc;
+                    self.set_r(.{31}, self.pc +% 4);
+                    self.next_pc = ((self.pc -% 4) & 0xf0000000) + a.imm * 4;
                 },
                 .jalr => |a| {
-                    const new_pc = self.r(a.rs);
-                    self.set_r(a.rd, self.pc + 8);
-                    self.pc +%= 4;
-                    // Execute instruction in the branch delay slot
-                    _ = self.step();
-                    self.pc = new_pc;
+                    self.set_r(a.rd, self.pc +% 4);
+                    self.next_pc = self.r(a.rs);
                 },
                 .bne => |a| {
                     self.branch_cmp(self.r(a.rs) != self.r(a.rt), a.imm);
@@ -640,39 +603,33 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 // Other
                 .rfe => |a| {
                     _ = a;
-                    std.debug.print("TODO: pc={x:0>8} rfe\n", .{self.pc});
-                    self.pc +%= 4;
+                    std.debug.print("TODO: pc={x:0>8} rfe\n", .{self.pc -% 4});
                 },
                 .mflo => |a| {
                     dst_r = a.rd;
                     dst_v = self.lo;
-                    self.pc +%= 4;
                 },
                 .mfhi => |a| {
                     dst_r = a.rd;
                     dst_v = self.hi;
-                    self.pc +%= 4;
                 },
                 .mtc0 => |a| {
                     if (a.imm != 0) {
-                        std.debug.panic("TODO: mtc0 with sel={} at pc={x:0>8}", .{ a.imm, self.pc });
+                        std.debug.panic("TODO: mtc0 with sel={} at pc={x:0>8}", .{ a.imm, self.pc -% 4 });
                     }
                     self.cop0.set_r(a.rd, self.r(a.rt));
-                    self.pc +%= 4;
                 },
                 .mfc0 => |a| {
                     if (a.imm != 0) {
-                        std.debug.panic("TODO: mfc0 with sel={} at pc={x:0>8}", .{ a.imm, self.pc });
+                        std.debug.panic("TODO: mfc0 with sel={} at pc={x:0>8}", .{ a.imm, self.pc -% 4 });
                     }
                     const v_c0 = self.cop0.r(a.rd);
-                    self.pc +%= 4;
 
                     delay_dst_r = a.rt;
                     delay_dst_v = v_c0;
                 },
                 .bc0f => |a| {
                     _ = a;
-                    self.pc +%= 4;
                     // TODO
                 },
                 else => std.debug.panic("TODO: inst {?}", .{inst}),
@@ -681,17 +638,9 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         }
 
         fn branch_cmp(self: *Self, cmp_result: bool, imm: i16) void {
-            self.pc +%= 4;
             if (cmp_result) {
-                const pc = self.pc;
-                // Execute instruction in the branch delay slot.  Before that
-                // apply the delay register update if any.
-                self.set_r(self.delay_dst_r, self.delay_dst_v);
-                self.delay_dst_r = .{0};
-                self.delay_dst_v = 0;
-                self.step();
                 const offset: u32 = @bitCast(@as(i32, imm * 4));
-                self.pc = pc +% offset;
+                self.next_pc = self.pc +% offset;
             }
         }
 
