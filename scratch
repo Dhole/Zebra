@@ -43,3 +43,10 @@ bne v0, zero, 0x00003388
 sw v0, 0x0(t0)
 
 The `lw` executes the `bne` in the delay slot, which executes the `sw` in the delay slot, so the `sw` doesn't see the result of `lw` :(
+
+---
+
+Commands:
+```
+zig build debug -- --bios bios/SCPH1001.BIN -c "c"
+```

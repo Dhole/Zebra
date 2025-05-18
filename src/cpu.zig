@@ -112,21 +112,110 @@ const Dbg = struct {
     }
 };
 
+//  0     IEc Current Interrupt Enable  (0=Disable, 1=Enable) ;rfe pops IUp here
+//  1     KUc Current Kernal/User Mode  (0=Kernel, 1=User)    ;rfe pops KUp here
+//  2     IEp Previous Interrupt Disable                      ;rfe pops IUo here
+//  3     KUp Previous Kernal/User Mode                       ;rfe pops KUo here
+//  4     IEo Old Interrupt Disable                       ;left unchanged by rfe
+//  5     KUo Old Kernal/User Mode                        ;left unchanged by rfe
+//  6-7   -   Not used (zero)
+//  8-15  Im  8 bit interrupt mask fields. When set the corresponding
+//            interrupts are allowed to cause an exception.
 const COP0_SR_ISC = 16; // Isolate Cache (0=No, 1=Isolate)
+//              When isolated, all load and store operations are targetted
+//              to the Data cache, and never the main memory.
+//              (Used by PSX Kernel, in combination with Port FFFE0130h)
+//  17    Swc Swapped cache mode (0=Normal, 1=Swapped)
+//              Instruction cache will act as Data cache and vice versa.
+//              Use only with Isc to access & invalidate Instr. cache entries.
+//              (Not used by PSX Kernel)
+//  18    PZ  When set cache parity bits are written as 0.
+//  19    CM  Shows the result of the last load operation with the D-cache
+//            isolated. It gets set if the cache really contained data
+//            for the addressed memory location.
+//  20    PE  Cache parity error (Does not cause exception)
+//  21    TS  TLB shutdown. Gets set if a programm address simultaneously
+//            matches 2 TLB entries.
+//            (initial value on reset allows to detect extended CPU version?)
+const COP0_SR_BEV = 22; // BEV Boot exception vectors in RAM/ROM (0=RAM/KSEG0, 1=ROM/KSEG1)
+//  23-24 -   Not used (zero)
+//  25    RE  Reverse endianness   (0=Normal endianness, 1=Reverse endianness)
+//              Reverses the byte order in which data is stored in
+//              memory. (lo-hi -> hi-lo)
+//              (Has affect only to User mode, not to Kernal mode) (?)
+//              (The bit doesn't exist in PSX ?)
+//  26-27 -   Not used (zero)
+//  28    CU0 COP0 Enable (0=Enable only in Kernal Mode, 1=Kernal and User Mode)
+//  29    CU1 COP1 Enable (0=Disable, 1=Enable) (none such in PSX)
+//  30    CU2 COP2 Enable (0=Disable, 1=Enable) (GTE in PSX)
+//  31    CU3 COP3 Enable (0=Disable, 1=Enable) (none such in PSX)
+
+//  0-1   -      Not used (zero)
+//  2-6   Excode Describes what kind of exception occured:
+//                 00h INT     Interrupt
+//                 01h MOD     Tlb modification (none such in PSX)
+//                 02h TLBL    Tlb load         (none such in PSX)
+//                 03h TLBS    Tlb store        (none such in PSX)
+//                 04h AdEL    Address error, Data load or Instruction fetch
+//                 05h AdES    Address error, Data store
+//                             The address errors occur when attempting to read
+//                             outside of KUseg in user mode and when the address
+//                             is misaligned. (See also: BadVaddr register)
+//                 06h IBE     Bus error on Instruction fetch
+//                 07h DBE     Bus error on Data load/store
+//                 08h Syscall Generated unconditionally by syscall instruction
+//                 09h BP      Breakpoint - break instruction
+//                 0Ah RI      Reserved instruction
+//                 0Bh CpU     Coprocessor unusable
+//                 0Ch Ov      Arithmetic overflow
+//                 0Dh-1Fh     Not used
+//  7     -      Not used (zero)
+//  8-15  Ip     Interrupt pending field. Bit 8 and 9 are R/W, and
+//               contain the last value written to them. As long
+//               as any of the bits are set they will cause an
+//               interrupt if the corresponding bit is set in IM.
+//  16-27 -      Not used (zero)
+//  28-29 CE     Opcode Bit26-27 (aka coprocessor number in case of COP opcodes)
+//  30    -      Not used (zero) / Undoc: When BD=1, Branch condition (0=False)
+const COP0_CAUSE_BD = 31; // BD Branch Delay (set when last exception points to the branch
+//               instruction instead of the instruction in the branch delay
+//               slot, where the exception occurred)
+
+const Exception = enum(u8) {
+    int = 0x00, // INT     Interrupt
+    mod = 0x01, // MOD     Tlb modification (none such in PSX)
+    tlbl = 0x02, // TLBL    Tlb load         (none such in PSX)
+    tlbs = 0x03, // TLBS    Tlb store        (none such in PSX)
+    adel = 0x04, // AdEL    Address error, Data load or Instruction fetch
+    ades = 0x05, // AdES    Address error, Data store
+    //                          The address errors occur when attempting to read
+    //                          outside of KUseg in user mode and when the address
+    //                          is misaligned. (See also: BadVaddr register)
+    ibe = 0x06, // IBE     Bus error on Instruction fetch
+    dbe = 0x07, // DBE     Bus error on Data load/store
+    syscall = 0x08, // Syscall Generated unconditionally by syscall instruction
+    bp = 0x09, // BP      Breakpoint - break instruction
+    ri = 0x0a, // RI      Reserved instruction
+    cpu = 0x0b, // CpU     Coprocessor unusable
+    ov = 0x0c, // Ov      Arithmetic overflow
+};
 
 const Cop0 = struct {
     // COP0 Register Summary
-    const REG_BPC = 3; // Breakpoint on execute (R/W)
-    const REG_BDA = 5; // Breakpoint on data access (R/W)
-    const REG_JUMPDEST = 6; // Randomly memorized jump address (R)
-    const REG_DCIC = 7; // Breakpoint control (R/W)
-    const REG_BadVaddr = 8; // Bad Virtual Address (R)
-    const REG_BDAM = 9; // Data Access breakpoint mask (R/W)
-    const REG_BPCM = 11; // Execute breakpoint mask (R/W)
-    const REG_SR = 12; // System status register (R/W)
-    const REG_CAUSE = 13; // Describes the most recently recognised exception (R)
-    const REG_EPC = 14; // Return Address from Trap (R)
-    const REG_PRID = 15; // Processor ID (R)
+    const Reg = enum(u8) {
+        bpc = 3, // Breakpoint on execute (R/W)
+        bda = 5, // Breakpoint on data access (R/W)
+        jumpdest = 6, // Randomly memorized jump address (R)
+        dcic = 7, // Breakpoint control (R/W)
+        bad_vaddr = 8, // Bad Virtual Address (R)
+        bdam = 9, // Data Access breakpoint mask (R/W)
+        bpcm = 11, // Execute breakpoint mask (R/W)
+        sr = 12, // System status register (R/W)
+        cause = 13, // Describes the most recently recognised exception (R)
+        epc = 14, // Return Address from Trap (R)
+        prid = 15, // Processor ID (R)
+        _,
+    };
 
     status_reg: u32, // 12=SR
     cause: u32, // 13=CAUSE
@@ -144,20 +233,26 @@ const Cop0 = struct {
     }
 
     fn set_r(self: *Self, idx: RegIdx, v: u32) void {
-        switch (idx[0]) {
-            REG_BPC, REG_BDA, REG_JUMPDEST, REG_DCIC, REG_BDAM, REG_BPCM, REG_CAUSE => {
+        const reg: Reg = @enumFromInt(idx[0]);
+        switch (reg) {
+            Reg.bpc, Reg.bda, Reg.jumpdest, Reg.dcic, Reg.bdam, Reg.bpcm => {
                 if (v != 0) {
                     std.debug.panic("TODO: cop0 write reg {} {x:0>8}", .{ idx[0], v });
                 }
             },
-            REG_SR => self.status_reg = v,
+            Reg.sr => self.status_reg = v,
+            Reg.cause => std.debug.print("WARN: write to cop0.cause", .{}),
+            Reg.epc => std.debug.print("WARN: write to cop0.epc", .{}),
             else => std.debug.panic("TODO: cop0 set_r {} {x:0>8}", .{ idx[0], v }),
         }
     }
 
     fn r(self: *Self, idx: RegIdx) u32 {
-        return switch (idx[0]) {
-            REG_SR => self.status_reg,
+        const reg: Reg = @enumFromInt(idx[0]);
+        return switch (reg) {
+            Reg.sr => self.status_reg,
+            Reg.cause => self.cause,
+            Reg.epc => self.exception_pc,
             else => std.debug.panic("TODO: cop0 r {}", .{idx[0]}),
         };
     }
@@ -170,8 +265,11 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         dbg: Dbg,
         regs: [32]u32, // Registers
         cop0: Cop0,
-        pc: u32, // Program Counter
-        next_pc: u32, // Scheduled next Program Counter
+        pc: u32 = 0, // Current Program Counter
+        next_pc: u32, // Next Program Counter
+        next_next_pc: u32, // Next next Program Counter
+        branch: bool = false, // Last instruction branched
+        delay_slot: bool = false, // Current instruction is in a branch delay slot
         hi: u32, // Multiplication 64 bit high result or division remainder
         lo: u32, // Multiplication 64 bit low result or division quotient
         delay_dst_r: RegIdx = .{0}, // register to update from a load delay
@@ -201,8 +299,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .dbg = Dbg.init(allocator),
                 .regs = [_]u32{0} ** 32,
                 .cop0 = Cop0.init(),
-                .pc = pc,
-                .next_pc = pc +% 4,
+                .next_pc = pc,
+                .next_next_pc = pc +% 4,
                 .lo = 0,
                 .hi = 0,
                 .bios = bios_copy,
@@ -266,7 +364,11 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
 
         pub fn step(self: *Self) void {
             // Fetch next instruction
-            const inst_raw = self.read(true, u32, self.pc);
+            const inst_raw = self.read(true, u32, self.next_pc) catch {
+                self.exception(Exception.adel);
+                return;
+            };
+            self.pc = self.next_pc;
             const inst = decode(inst_raw) orelse std.debug.panic("TODO: unknown inst {x:0>8}", .{inst_raw});
             if (self.cfg.dbg) {
                 if (self.dbg.trace_inst) {
@@ -281,13 +383,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     }
                 }
             }
-            self.pc = self.next_pc;
-            self.next_pc = self.pc +% 4;
-            const dst_r, const dst_v, const delay_dst_r, const delay_dst_v = self.exec_no_write_regs(inst);
-            self.set_r(dst_r, dst_v);
-            self.set_r(self.delay_dst_r, self.delay_dst_v);
-            self.delay_dst_r = delay_dst_r;
-            self.delay_dst_v = delay_dst_v;
+            self.exec(inst);
         }
 
         fn dbg_trace(self: *Self, inst: Inst, inst_raw: u32) !void {
@@ -362,7 +458,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .lw => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
                     const addr = self.r(a.rs) +% offset;
-                    const v = self.read(false, u32, addr);
+                    const v = try self.read(false, u32, addr);
                     try self.dbg_w.print(
                         "{}=0x{x:0>8}, addr=0x{x:0>8}[0x{x:0>8}]",
                         .{ fmt_reg(a.rt), self.r(a.rt), addr, v },
@@ -371,7 +467,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .lh => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
                     const addr = self.r(a.rs) +% offset;
-                    const v = self.read(false, u16, addr);
+                    const v = try self.read(false, u16, addr);
                     try self.dbg_w.print(
                         "{}=0x{x:0>8}, addr=0x{x:0>8}[0x{x:0>4}]",
                         .{ fmt_reg(a.rt), self.r(a.rt), addr, v },
@@ -380,7 +476,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .lb, .lbu => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
                     const addr = self.r(a.rs) +% offset;
-                    const v = self.read(false, u8, addr);
+                    const v = try self.read(false, u8, addr);
                     try self.dbg_w.print(
                         "{}=0x{x:0>8}, addr=0x{x:0>8}[0x{x:0>2}]",
                         .{ fmt_reg(a.rt), self.r(a.rt), addr, v },
@@ -399,10 +495,16 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             try self.dbg_w.print("\n", .{});
         }
 
-        // NOTE: This may be buggy after so many changes in `fn step`
         pub fn exec(self: *Self, inst: Inst) void {
-            const dst_r, const dst_v = self.exec_no_write_regs(inst);
+            self.delay_slot = self.branch;
+            self.branch = false;
+            self.next_pc = self.next_next_pc;
+            self.next_next_pc = self.next_pc +% 4;
+            const dst_r, const dst_v, const delay_dst_r, const delay_dst_v = self.exec_no_write_regs(inst);
             self.set_r(dst_r, dst_v);
+            self.set_r(self.delay_dst_r, self.delay_dst_v);
+            self.delay_dst_r = delay_dst_r;
+            self.delay_dst_v = delay_dst_v;
         }
 
         // execute instruction and return the reg that needs to been written by the operation
@@ -426,11 +528,12 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     const rs: i32 = @bitCast(self.r(a.rs));
                     const rt: i32 = @bitCast(self.r(a.rt));
                     const res, const ov = @addWithOverflow(rs, rt);
-                    if (ov == 1) {
-                        std.debug.panic("TODO: add overflow trap", .{});
+                    if (ov == 0) {
+                        dst_r = a.rd;
+                        dst_v = @bitCast(res);
+                    } else {
+                        self.exception(Exception.ov);
                     }
-                    dst_r = a.rd;
-                    dst_v = @bitCast(res);
                 },
                 .addiu => |a| {
                     const imm: u32 = @bitCast(@as(i32, a.imm));
@@ -440,11 +543,12 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .addi => |a| {
                     const rs: i32 = @bitCast(self.r(a.rs));
                     const res, const ov = @addWithOverflow(rs, @as(i32, a.imm));
-                    if (ov == 1) {
-                        std.debug.panic("TODO: addi overflow trap", .{});
+                    if (ov == 0) {
+                        dst_r = a.rt;
+                        dst_v = @bitCast(res);
+                    } else {
+                        self.exception(Exception.ov);
                     }
-                    dst_r = a.rt;
-                    dst_v = @bitCast(res);
                 },
                 .subu => |a| {
                     dst_r = a.rd;
@@ -488,6 +592,17 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     dst_r = a.rt;
                     dst_v = self.r(a.rs) | @as(u32, imm);
                 },
+                .nor => |a| {
+                    dst_r = a.rd;
+                    dst_v = ~(self.r(a.rs) | self.r(a.rt));
+                },
+                .multu => |a| {
+                    const rs: u64 = @as(u64, self.r(a.rs));
+                    const rt: u64 = @as(u64, self.r(a.rt));
+                    const res = rs * rt;
+                    self.hi = @intCast(res >> 32);
+                    self.lo = @intCast(res & 0xffff_ffff);
+                },
                 .div => |a| {
                     const rs: i32 = @bitCast(self.r(a.rs));
                     const rt: i32 = @bitCast(self.r(a.rt));
@@ -522,61 +637,116 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     dst_r = a.rd;
                     dst_v = self.r(a.rt) << @intCast(a.imm);
                 },
+                .sllv => |a| {
+                    dst_r = a.rd;
+                    dst_v = self.r(a.rt) << @intCast(self.r(a.rs) & 0b11111);
+                },
                 .srl => |a| {
                     dst_r = a.rd;
                     dst_v = self.r(a.rt) >> @intCast(a.imm);
+                },
+                .srlv => |a| {
+                    dst_r = a.rd;
+                    dst_v = self.r(a.rt) >> @intCast(self.r(a.rs) & 0b11111);
                 },
                 .sra => |a| {
                     dst_r = a.rd;
                     const rt: i32 = @bitCast(self.r(a.rt));
                     dst_v = @bitCast(rt >> @intCast(a.imm));
                 },
+                .srav => |a| {
+                    dst_r = a.rd;
+                    const rt: i32 = @bitCast(self.r(a.rt));
+                    dst_v = @bitCast(rt >> @intCast(self.r(a.rs) & 0b11111));
+                },
                 // Load & Store
                 .lw => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
-                    const v_lw = self.read(false, u32, self.r(a.rs) +% offset);
-                    delay_dst_r = a.rt;
-                    delay_dst_v = v_lw;
+                    if (self.read(false, u32, self.r(a.rs) +% offset)) |v_lw| {
+                        delay_dst_r = a.rt;
+                        delay_dst_v = v_lw;
+                    } else |_| {
+                        self.exception(Exception.adel);
+                    }
+                },
+                .lh => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    if (self.read(false, u16, self.r(a.rs) +% offset)) |v_lw_u16| {
+                        const v_lw_i16: i16 = @bitCast(v_lw_u16);
+                        const v_lw: u32 = @bitCast(@as(i32, v_lw_i16));
+                        delay_dst_r = a.rt;
+                        delay_dst_v = v_lw;
+                    } else |_| {
+                        self.exception(Exception.adel);
+                    }
+                },
+                .lhu => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    if (self.read(false, u16, self.r(a.rs) +% offset)) |v_lw_u16| {
+                        const v_lw = @as(u32, v_lw_u16);
+                        delay_dst_r = a.rt;
+                        delay_dst_v = v_lw;
+                    } else |_| {
+                        self.exception(Exception.adel);
+                    }
                 },
                 .lb => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
-                    const v_lw_i8: i8 = @bitCast(self.read(false, u8, self.r(a.rs) +% offset));
-                    const v_lw: u32 = @bitCast(@as(i32, v_lw_i8));
-                    delay_dst_r = a.rt;
-                    delay_dst_v = v_lw;
+                    if (self.read(false, u8, self.r(a.rs) +% offset)) |v_lw_u8| {
+                        const v_lw_i8: i8 = @bitCast(v_lw_u8);
+                        const v_lw: u32 = @bitCast(@as(i32, v_lw_i8));
+                        delay_dst_r = a.rt;
+                        delay_dst_v = v_lw;
+                    } else |_| {
+                        self.exception(Exception.adel);
+                    }
                 },
                 .lbu => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
-                    const v_lw = @as(u32, self.read(false, u8, self.r(a.rs) +% offset));
-                    delay_dst_r = a.rt;
-                    delay_dst_v = v_lw;
+                    if (self.read(false, u8, self.r(a.rs) +% offset)) |v_lw_u8| {
+                        const v_lw = @as(u32, v_lw_u8);
+                        delay_dst_r = a.rt;
+                        delay_dst_v = v_lw;
+                    } else |_| {
+                        self.exception(Exception.adel);
+                    }
                 },
                 .sw => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
-                    self.write(u32, self.r(a.rs) +% offset, self.r(a.rt));
+                    self.write(u32, self.r(a.rs) +% offset, self.r(a.rt)) catch {
+                        self.exception(Exception.ades);
+                    };
                 },
                 .sh => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
-                    self.write(u16, self.r(a.rs) +% offset, @intCast(self.r(a.rt) & 0xffff));
+                    self.write(u16, self.r(a.rs) +% offset, @intCast(self.r(a.rt) & 0xffff)) catch {
+                        self.exception(Exception.ades);
+                    };
                 },
                 .sb => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
-                    self.write(u8, self.r(a.rs) +% offset, @intCast(self.r(a.rt) & 0xff));
+                    self.write(u8, self.r(a.rs) +% offset, @intCast(self.r(a.rt) & 0xff)) catch {
+                        self.exception(Exception.ades);
+                    };
                 },
                 // Jump & Branch
                 .j => |a| {
-                    self.next_pc = ((self.pc -% 4) & 0xf0000000) + a.imm * 4;
+                    self.next_next_pc = (self.pc & 0xf0000000) + a.imm * 4;
+                    self.branch = true;
                 },
                 .jr => |a| {
-                    self.next_pc = self.r(a.rs);
+                    self.next_next_pc = self.r(a.rs);
+                    self.branch = true;
                 },
                 .jal => |a| {
-                    self.set_r(.{31}, self.pc +% 4);
-                    self.next_pc = ((self.pc -% 4) & 0xf0000000) + a.imm * 4;
+                    self.set_r(.{31}, self.pc +% 8);
+                    self.next_next_pc = (self.pc & 0xf0000000) + a.imm * 4;
+                    self.branch = true;
                 },
                 .jalr => |a| {
-                    self.set_r(a.rd, self.pc +% 4);
-                    self.next_pc = self.r(a.rs);
+                    self.set_r(a.rd, self.pc +% 8);
+                    self.next_next_pc = self.r(a.rs);
+                    self.branch = true;
                 },
                 .bne => |a| {
                     self.branch_cmp(self.r(a.rs) != self.r(a.rt), a.imm);
@@ -603,7 +773,10 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 // Other
                 .rfe => |a| {
                     _ = a;
-                    std.debug.print("TODO: pc={x:0>8} rfe\n", .{self.pc -% 4});
+                    const mask_int_enable_user: u32 = 0b0000_0000_0001_1111;
+                    const mode = self.cop0.status_reg & mask_int_enable_user;
+                    self.cop0.status_reg &= ~mask_int_enable_user;
+                    self.cop0.status_reg |= (mode >> 2);
                 },
                 .mflo => |a| {
                     dst_r = a.rd;
@@ -613,15 +786,21 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     dst_r = a.rd;
                     dst_v = self.hi;
                 },
+                .mtlo => |a| {
+                    self.lo = self.r(a.rs);
+                },
+                .mthi => |a| {
+                    self.hi = self.r(a.rs);
+                },
                 .mtc0 => |a| {
                     if (a.imm != 0) {
-                        std.debug.panic("TODO: mtc0 with sel={} at pc={x:0>8}", .{ a.imm, self.pc -% 4 });
+                        std.debug.panic("TODO: mtc0 with sel={} at pc={x:0>8}", .{ a.imm, self.pc });
                     }
                     self.cop0.set_r(a.rd, self.r(a.rt));
                 },
                 .mfc0 => |a| {
                     if (a.imm != 0) {
-                        std.debug.panic("TODO: mfc0 with sel={} at pc={x:0>8}", .{ a.imm, self.pc -% 4 });
+                        std.debug.panic("TODO: mfc0 with sel={} at pc={x:0>8}", .{ a.imm, self.pc });
                     }
                     const v_c0 = self.cop0.r(a.rd);
 
@@ -632,7 +811,11 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     _ = a;
                     // TODO
                 },
-                else => std.debug.panic("TODO: inst {?}", .{inst}),
+                .sys => |a| {
+                    _ = a; // unused
+                    self.exception(Exception.syscall);
+                },
+                else => std.debug.panic("TODO: inst {?} at pc={x:0>8}", .{ inst, self.pc }),
             }
             return .{ dst_r, dst_v, delay_dst_r, delay_dst_v };
         }
@@ -640,25 +823,67 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         fn branch_cmp(self: *Self, cmp_result: bool, imm: i16) void {
             if (cmp_result) {
                 const offset: u32 = @bitCast(@as(i32, imm * 4));
-                self.next_pc = self.pc +% offset;
+                self.next_next_pc = self.pc +% 4 +% offset;
+                self.branch = true;
             }
         }
 
-        fn check_alignment(comptime T: type, addr: u32) void {
-            return switch (T) {
-                u8 => return,
+        fn exception(self: *Self, cause: Exception) void {
+            // Exception handler address depends on BEV
+            const handler: u32 = if (self.cop0.status_reg & (1 << COP0_SR_BEV) != 0)
+                0xbfc00180
+            else
+                0x80000080;
+
+            // Shift bits [5:0] of SR two places to the left.
+            // Those bits are three pairs of Interrupt Enable/User
+            // Mode bits behaving like a stack 3 entries deep.
+            // Entering an exception pushes a pair of zeroes
+            // by left shifting the stack which disables
+            // interrupts and puts the CPU in kernel mode.
+            // The original third entry is discarded (it’s up
+            // to the kernel to handle more than two recursive
+            // exception levels).
+            const mask_int_enable_user: u32 = 0b0000_0000_0001_1111;
+            const mode = self.cop0.status_reg & mask_int_enable_user;
+            self.cop0.status_reg &= ~mask_int_enable_user;
+            self.cop0.status_reg |= (mode << 2) & mask_int_enable_user;
+
+            self.cop0.cause = @intFromEnum(cause) << 2;
+
+            // Save current instruction in EPC
+            self.cop0.exception_pc = self.pc;
+            if (self.delay_slot) {
+                self.cop0.exception_pc = self.pc -% 4;
+                self.cop0.cause |= 1 << COP0_CAUSE_BD;
+            }
+
+            // Jump directly to the exception handler
+            self.next_pc = handler;
+            self.next_next_pc = self.next_pc +% 4;
+        }
+
+        fn check_alignment(comptime T: type, addr: u32) bool {
+            switch (T) {
+                u8 => return true,
                 u16 => {
                     if (addr % 2 != 0) {
-                        std.debug.panic("unaligned u16 memory access at {x:0>8}", .{addr});
+                        std.debug.print("unaligned u16 memory access at {x:0>8}\n", .{addr});
+                        return false;
+                    } else {
+                        return true;
                     }
                 },
                 u32 => {
                     if (addr % 4 != 0) {
-                        std.debug.panic("unaligned u32 memory access at {x:0>8}", .{addr});
+                        std.debug.print("unaligned u32 memory access at {x:0>8}\n", .{addr});
+                        return false;
+                    } else {
+                        return true;
                     }
                 },
                 else => @compileError("invalid T"),
-            };
+            }
         }
 
         fn ram_read(self: *Self, comptime T: type, addr: u32) T {
@@ -673,14 +898,16 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             return buf_read(T, self.bios, addr);
         }
 
-        pub fn read(self: *Self, comptime code: bool, comptime T: type, addr: u32) T {
+        pub fn read(self: *Self, comptime code: bool, comptime T: type, addr: u32) !T {
             if (!code) {
                 if (self.cop0.status_reg & (1 << COP0_SR_ISC) != 0) {
                     std.debug.print("TODO: read {s} Isolate Cache addr {x:0>8} (ignored)\n", .{ @typeName(T), addr });
                     return 0;
                 }
             }
-            Self.check_alignment(T, addr);
+            if (!Self.check_alignment(T, addr)) {
+                return error.unaligned;
+            }
             const region, const paddr = vaddr_to_paddr(addr);
             _ = region;
             if (ADDR_RAM <= paddr and paddr < SIZE_RAM) {
@@ -705,12 +932,14 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             }
         }
 
-        pub fn write(self: *Self, comptime T: type, addr: u32, v: T) void {
+        pub fn write(self: *Self, comptime T: type, addr: u32, v: T) !void {
             if (self.cop0.status_reg & (1 << COP0_SR_ISC) != 0) {
                 std.debug.print("TODO: write {s} Isolate Cache addr {x:0>8} value {x:0>8} (ignored)\n", .{ @typeName(T), addr, v });
                 return;
             }
-            Self.check_alignment(T, addr);
+            if (!Self.check_alignment(T, addr)) {
+                return error.unaligned;
+            }
             const region, const paddr = vaddr_to_paddr(addr);
             _ = region;
             if (ADDR_RAM <= paddr and paddr < ADDR_RAM + SIZE_RAM) {
@@ -733,20 +962,37 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 }
             }
             switch (T) {
-                u8 => std.debug.panic("TODO: io_regs_read u8 addr {x:0>8}\n", .{addr}),
-                u16 => std.debug.panic("TODO: io_regs_read u16 addr {x:0>8}\n", .{addr}),
+                u8 => std.debug.panic("TODO: io_regs_read u8 addr {x:0>8}\n", .{addr + ADDR_IO_PORTS}),
+                u16 => switch (addr) {
+                    ADDR_I_STAT => {
+                        std.debug.print("TODO: io_regs_read u16 ADDR_I_STAT\n", .{});
+                    },
+                    ADDR_I_MASK => {
+                        std.debug.print("TODO: io_regs_read u16 ADDR_I_MASK\n", .{});
+                    },
+                    ADDR_SPU_VOICE_START...ADDR_SPU_VOICE_END => {
+                        std.debug.print("TODO: io_regs_read u16 ADDR_SPU_VOICE_START...ADDR_SPU_VOICE_END {x:0>8}\n", .{addr + ADDR_IO_PORTS});
+                    },
+                    ADDR_SPU_CTL_START...ADDR_SPU_CTL_END => {
+                        std.debug.print("TODO: io_regs_read u16 ADDR_SPU_CTL_REG_START...ADDR_SPU_CTL_REG_END {x:0>8}\n", .{addr + ADDR_IO_PORTS});
+                    },
+                    else => std.debug.panic("TODO: io_regs_read u16 addr {x:0>8}\n", .{addr + ADDR_IO_PORTS}),
+                },
                 u32 => switch (addr) {
-                    I_STAT_ADDR => {
-                        std.debug.panic("TODO: io_regs_read u32 I_STAT_ADDR\n", .{});
+                    ADDR_I_MASK => {
+                        std.debug.print("TODO: io_regs_read u32 ADDR_I_MASK\n", .{});
                     },
-                    I_MASK_ADDR => {
-                        std.debug.print("TODO: io_regs_read u32 I_MASK_ADDR\n", .{});
-                        return 0;
+                    ADDR_DMA_START...ADDR_DMA_END => {
+                        std.debug.print("TODO: io_regs_read u32 ADDR_DMA_START...ADDR_DMA_END {x:0>8}\n", .{addr + ADDR_IO_PORTS});
                     },
-                    else => std.debug.panic("TODO: io_regs_read u32 addr {x:0>8}\n", .{addr}),
+                    ADDR_GPU_START...ADDR_GPU_END => {
+                        std.debug.print("TODO: io_regs_read u32 ADDR_GPU_START...ADDR_GPU_END {x:0>8}\n", .{addr + ADDR_IO_PORTS});
+                    },
+                    else => std.debug.panic("TODO: io_regs_read u32 addr {x:0>8}\n", .{addr + ADDR_IO_PORTS}),
                 },
                 else => @compileError("invalid T"),
             }
+            return 0;
         }
 
         fn io_regs_write(self: *Self, comptime T: type, addr: u32, v: T) void {
@@ -760,122 +1006,77 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     DTL_H2000_PSX_POST => {
                         std.debug.print("TODO: io_regs_write u8 DTL_H2000_PSX_POST value {x:0>8}\n", .{v});
                     },
-                    else => std.debug.panic("TODO: io_regs_write u8 addr {x:0>8} value {x:0>2}\n", .{ addr, v }),
+                    else => std.debug.panic("TODO: io_regs_write u8 addr {x:0>8} value {x:0>2}\n", .{ addr + ADDR_IO_PORTS, v }),
                 },
                 u16 => switch (addr) {
-                    MAIN_VOL_LR_ADDR => {
-                        std.debug.print("TODO: io_regs_write u16 MAIN_VOL_LR_ADDR value {x:0>8}\n", .{v});
+                    ADDR_I_MASK => {
+                        std.debug.print("TODO: io_regs_write u16 ADDR_I_MASK value {x:0>8}\n", .{v});
                     },
-                    MAIN_VOL_LR_ADDR + 2 => {
-                        std.debug.print("TODO: io_regs_write u16 MAIN_VOL_LR_ADDR+2 value {x:0>8}\n", .{v});
+                    ADDR_TIMERS_START...ADDR_TIMERS_END => {
+                        std.debug.print("TODO: io_regs_write u16 ADDR_TIMERS_START...ADDR_TIMERS_END {x:0>8} value {x:0>8}\n", .{ addr + ADDR_IO_PORTS, v });
                     },
-                    REV_VOL_LR_ADDR => {
-                        std.debug.print("TODO: io_regs_write u16 REV_VOL_LR_ADDR value {x:0>8}\n", .{v});
+                    ADDR_SPU_VOICE_START...ADDR_SPU_VOICE_END => {
+                        std.debug.print("TODO: io_regs_write u16 ADDR_SPU_VOICE_START...ADDR_SPU_VOICE_END {x:0>8} value {x:0>8}\n", .{ addr + ADDR_IO_PORTS, v });
                     },
-                    REV_VOL_LR_ADDR + 2 => {
-                        std.debug.print("TODO: io_regs_write u16 REV_VOL_LR_ADDR+2 value {x:0>8}\n", .{v});
+                    ADDR_SPU_MAIN_VOL_LR...ADDR_SPU_CTL_END => {
+                        std.debug.print("TODO: io_regs_write u16 ADDR_SPU_MAIN_VOL_LR...ADDR_SPU_CTL_REG_END {x:0>8} value {x:0>8}\n", .{ addr + ADDR_IO_PORTS, v });
                     },
-                    TIM0_CUR_CNT_VAL => {
-                        std.debug.print("TODO: io_regs_write u16 TIM0_CUR_CNT_VAL value {x:0>8}\n", .{v});
-                    },
-                    TIM0_CUR_CNT_VAL + 2 => {
-                        std.debug.print("TODO: io_regs_write u16 TIM0_CUR_CNT_VAL+2 value {x:0>8}\n", .{v});
-                    },
-                    TIM0_CNT_MODE_ADDR => {
-                        std.debug.print("TODO: io_regs_write u16 TIM0_CNT_MODE_ADDR value {x:0>8}\n", .{v});
-                    },
-                    TIM0_CNT_MODE_ADDR + 2 => {
-                        std.debug.print("TODO: io_regs_write u16 TIM0_CNT_MODE_ADDR+2 value {x:0>8}\n", .{v});
-                    },
-                    TIM0_CNT_TAR_VAL => {
-                        std.debug.print("TODO: io_regs_write u16 TIM0_CNT_TAR_VAL value {x:0>8}\n", .{v});
-                    },
-                    TIM0_CNT_TAR_VAL + 2 => {
-                        std.debug.print("TODO: io_regs_write u16 TIM0_CNT_TAR_VAL+2 value {x:0>8}\n", .{v});
-                    },
-                    TIM1_CUR_CNT_VAL => {
-                        std.debug.print("TODO: io_regs_write u16 TIM1_CUR_CNT_VAL value {x:0>8}\n", .{v});
-                    },
-                    TIM1_CUR_CNT_VAL + 2 => {
-                        std.debug.print("TODO: io_regs_write u16 TIM1_CUR_CNT_VAL+2 value {x:0>8}\n", .{v});
-                    },
-                    TIM1_CNT_MODE_ADDR => {
-                        std.debug.print("TODO: io_regs_write u16 TIM1_CNT_MODE_ADDR value {x:0>8}\n", .{v});
-                    },
-                    TIM1_CNT_MODE_ADDR + 2 => {
-                        std.debug.print("TODO: io_regs_write u16 TIM1_CNT_MODE_ADDR+2 value {x:0>8}\n", .{v});
-                    },
-                    TIM1_CNT_TAR_VAL => {
-                        std.debug.print("TODO: io_regs_write u16 TIM1_CNT_TAR_VAL value {x:0>8}\n", .{v});
-                    },
-                    TIM1_CNT_TAR_VAL + 2 => {
-                        std.debug.print("TODO: io_regs_write u16 TIM1_CNT_TAR_VAL+2 value {x:0>8}\n", .{v});
-                    },
-                    TIM2_CUR_CNT_VAL => {
-                        std.debug.print("TODO: io_regs_write u16 TIM2_CUR_CNT_VAL value {x:0>8}\n", .{v});
-                    },
-                    TIM2_CUR_CNT_VAL + 2 => {
-                        std.debug.print("TODO: io_regs_write u16 TIM2_CUR_CNT_VAL+2 value {x:0>8}\n", .{v});
-                    },
-                    TIM2_CNT_MODE_ADDR => {
-                        std.debug.print("TODO: io_regs_write u16 TIM2_CNT_MODE_ADDR value {x:0>8}\n", .{v});
-                    },
-                    TIM2_CNT_MODE_ADDR + 2 => {
-                        std.debug.print("TODO: io_regs_write u16 TIM2_CNT_MODE_ADDR+2 value {x:0>8}\n", .{v});
-                    },
-                    TIM2_CNT_TAR_VAL => {
-                        std.debug.print("TODO: io_regs_write u16 TIM2_CNT_TAR_VAL value {x:0>8}\n", .{v});
-                    },
-                    TIM2_CNT_TAR_VAL + 2 => {
-                        std.debug.print("TODO: io_regs_write u16 TIM2_CNT_TAR_VAL+2 value {x:0>8}\n", .{v});
-                    },
-                    else => std.debug.panic("TODO: io_regs_write u16 addr {x:0>8} value {x:0>4}\n", .{ addr, v }),
+                    else => std.debug.panic("TODO: io_regs_write u16 addr {x:0>8} value {x:0>4}\n", .{ addr + ADDR_IO_PORTS, v }),
                 },
                 u32 => switch (addr) {
-                    I_STAT_ADDR => {
-                        std.debug.print("TODO: io_regs_write u32 I_STAT_ADDR value {x:0>8}\n", .{v});
+                    ADDR_DMA_START...ADDR_DMA_END => {
+                        std.debug.print("TODO: io_regs_write u32 ADDR_DMA_START...ADDR_DMA_END {x:0>8} value {x:0>8}\n", .{ addr + ADDR_IO_PORTS, v });
                     },
-                    I_MASK_ADDR => {
-                        std.debug.print("TODO: io_regs_write u32 I_MASK_ADDR value {x:0>8}\n", .{v});
+                    ADDR_TIMERS_START...ADDR_TIMERS_END => {
+                        std.debug.print("TODO: io_regs_write u32 ADDR_TIMERS_START...ADDR_TIMERS_END {x:0>8} value {x:0>8}\n", .{ addr + ADDR_IO_PORTS, v });
                     },
-                    EXP1_BASE_ADDR => {
+                    ADDR_I_STAT => {
+                        std.debug.print("TODO: io_regs_write u32 ADDR_I_STAT value {x:0>8}\n", .{v});
+                    },
+                    ADDR_I_MASK => {
+                        std.debug.print("TODO: io_regs_write u32 ADDR_I_MASK value {x:0>8}\n", .{v});
+                    },
+                    ADDR_EXP1_BASE => {
                         if (v != 0x1f000000) {
                             std.debug.panic("Bad expansion 1 base address: {x:0>8}", .{v});
                         }
                     },
-                    EXP2_BASE_ADDR => {
+                    ADDR_EXP2_BASE => {
                         if (v != 0x1f802000) {
                             std.debug.panic("Bad expansion 1 base address: {x:0>8}", .{v});
                         }
                     },
-                    EXP1_DELAY_ADDR => {
-                        std.debug.print("TODO: io_regs_write u32 EXP1_DELAY_ADDR value {x:0>8}\n", .{v});
+                    ADDR_EXP1_DELAY => {
+                        std.debug.print("TODO: io_regs_write u32 ADDR_EXP1_DELAY value {x:0>8}\n", .{v});
                     },
-                    EXP3_DELAY_ADDR => {
-                        std.debug.print("TODO: io_regs_write u32 EXP3_DELAY_ADDR value {x:0>8}\n", .{v});
+                    ADDR_EXP3_DELAY => {
+                        std.debug.print("TODO: io_regs_write u32 ADDR_EXP3_DELAY value {x:0>8}\n", .{v});
                     },
-                    BIOS_ROM_ADDR => {
-                        std.debug.print("TODO: io_regs_write u32 BIOS_ROM_ADDR value {x:0>8}\n", .{v});
+                    ADDR_BIOS_ROM => {
+                        std.debug.print("TODO: io_regs_write u32 ADDR_BIOS_ROM value {x:0>8}\n", .{v});
                     },
-                    SPU_DELAY_ADDR => {
-                        std.debug.print("TODO: io_regs_write u32 SPU_DELAY_ADDR value {x:0>8}\n", .{v});
+                    ADDR_SPU_DELAY => {
+                        std.debug.print("TODO: io_regs_write u32 ADDR_SPU_DELAY value {x:0>8}\n", .{v});
                     },
-                    CDROM_DELAY_ADDR => {
-                        std.debug.print("TODO: io_regs_write u32 CDROM_DELAY_ADDR value {x:0>8}\n", .{v});
+                    ADDR_CDROM_DELAY => {
+                        std.debug.print("TODO: io_regs_write u32 ADDR_CDROM_DELAY value {x:0>8}\n", .{v});
                     },
-                    EXP2_DELAY_ADDR => {
-                        std.debug.print("TODO: io_regs_write u32 EXP2_DELAY_ADDR value {x:0>8}\n", .{v});
+                    ADDR_EXP2_DELAY => {
+                        std.debug.print("TODO: io_regs_write u32 ADDR_EXP2_DELAY value {x:0>8}\n", .{v});
                     },
-                    COM_DELAY_ADDR => {
-                        std.debug.print("TODO: io_regs_write u32 COM_DELAY_ADDR value {x:0>8}\n", .{v});
+                    ADDR_COM_DELAY => {
+                        std.debug.print("TODO: io_regs_write u32 ADDR_COM_DELAY value {x:0>8}\n", .{v});
                     },
-                    RAM_SIZE_ADDR => {
-                        std.debug.print("TODO: io_regs_write u32 RAM_SIZE_ADDR value {x:0>8}\n", .{v});
+                    ADDR_RAM_SIZE => {
+                        std.debug.print("TODO: io_regs_write u32 ADDR_RAM_SIZE value {x:0>8}\n", .{v});
                     },
-                    MAIN_VOL_LR_ADDR => {
-                        std.debug.print("TODO: io_regs_write u32 MAIN_VOL_LR_ADDR value {x:0>8}\n", .{v});
+                    ADDR_SPU_MAIN_VOL_LR => {
+                        std.debug.print("TODO: io_regs_write u32 ADDR_SPU_MAIN_VOL_LR value {x:0>8}\n", .{v});
                     },
-                    else => std.debug.panic("TODO: io_regs_write u32 addr {x:0>8} value {x:0>8}\n", .{ addr, v }),
+                    ADDR_GPU_START...ADDR_GPU_END => {
+                        std.debug.print("TODO: io_regs_write u32 ADDR_GPU_START...ADDR_GPU_END {x:0>8} value {x:0>8}\n", .{ addr + ADDR_IO_PORTS, v });
+                    },
+                    else => std.debug.panic("TODO: io_regs_write u32 addr {x:0>8} value {x:0>8}\n", .{ addr + ADDR_IO_PORTS, v }),
                 },
                 else => @compileError("invalid T"),
             }
@@ -889,15 +1090,15 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
 
 // Memory Control 1
 
-const EXP1_BASE_ADDR: u32 = 0x0000; // 1f801000 4 Expansion 1 Base Address (usually 1F000000h)
-const EXP2_BASE_ADDR: u32 = 0x0004; // 1f801004 4 Expansion 2 Base Address (usually 1F802000h)
-const EXP1_DELAY_ADDR: u32 = 0x0008; // 1f801008 4 Expansion 1 Delay/Size (usually 0013243Fh; 512Kbytes 8bit-bus)
-const EXP3_DELAY_ADDR: u32 = 0x000c; // 1f80100c 4 Expansion 3 Delay/Size (usually 00003022h; 1 byte)
-const BIOS_ROM_ADDR: u32 = 0x0010; // 1f801010 4 BIOS ROM Delay/Size (usually 0013243Fh; 512Kbytes 8bit-bus)
-const SPU_DELAY_ADDR: u32 = 0x0014; // 1f801014 4 SPU_DELAY Delay/Size (usually 200931E1h)
-const CDROM_DELAY_ADDR: u32 = 0x0018; // 1f801018 4 CDROM_DELAY Delay/Size (usually 00020843h or 00020943h)
-const EXP2_DELAY_ADDR: u32 = 0x001c; // 1f80101c 4 Expansion 2 Delay/Size (usually 00070777h; 128-bytes 8bit-bus)
-const COM_DELAY_ADDR: u32 = 0x0020; // 1f801020 4 COM_DELAY / COMMON_DELAY (00031125h or 0000132Ch or 00001325h)
+const ADDR_EXP1_BASE: u32 = 0x0000; // 1f801000 4 Expansion 1 Base Address (usually 1F000000h)
+const ADDR_EXP2_BASE: u32 = 0x0004; // 1f801004 4 Expansion 2 Base Address (usually 1F802000h)
+const ADDR_EXP1_DELAY: u32 = 0x0008; // 1f801008 4 Expansion 1 Delay/Size (usually 0013243Fh; 512Kbytes 8bit-bus)
+const ADDR_EXP3_DELAY: u32 = 0x000c; // 1f80100c 4 Expansion 3 Delay/Size (usually 00003022h; 1 byte)
+const ADDR_BIOS_ROM: u32 = 0x0010; // 1f801010 4 BIOS ROM Delay/Size (usually 0013243Fh; 512Kbytes 8bit-bus)
+const ADDR_SPU_DELAY: u32 = 0x0014; // 1f801014 4 SPU_DELAY Delay/Size (usually 200931E1h)
+const ADDR_CDROM_DELAY: u32 = 0x0018; // 1f801018 4 CDROM_DELAY Delay/Size (usually 00020843h or 00020943h)
+const ADDR_EXP2_DELAY: u32 = 0x001c; // 1f80101c 4 Expansion 2 Delay/Size (usually 00070777h; 128-bytes 8bit-bus)
+const ADDR_COM_DELAY: u32 = 0x0020; // 1f801020 4 COM_DELAY / COMMON_DELAY (00031125h or 0000132Ch or 00001325h)
 
 // Peripheral I/O Ports
 
@@ -915,38 +1116,42 @@ const COM_DELAY_ADDR: u32 = 0x0020; // 1f801020 4 COM_DELAY / COMMON_DELAY (0003
 
 // Memory Control 2
 
-const RAM_SIZE_ADDR: u32 = 0x0060; // 1f801060 4/2 RAM_SIZE (usually 00000B88h; 2MB RAM mirrored in first 8MB)
+const ADDR_RAM_SIZE: u32 = 0x0060; // 1f801060 4/2 RAM_SIZE (usually 00000B88h; 2MB RAM mirrored in first 8MB)
 
 // Interrupt Control
 
-const I_STAT_ADDR: u32 = 0x0070; // 1f801070 2 I_STAT - Interrupt status register
-const I_MASK_ADDR: u32 = 0x0074; // 1f801074 2 I_MASK - Interrupt mask register
+const ADDR_I_STAT: u32 = 0x0070; // 1f801070 2 I_STAT - Interrupt status register
+const ADDR_I_MASK: u32 = 0x0074; // 1f801074 2 I_MASK - Interrupt mask register
 
 // DMA Registers
 
-//   1F80108xh      DMA0 channel 0 - MDECin
-//   1F80109xh      DMA1 channel 1 - MDECout
-//   1F8010Axh      DMA2 channel 2 - GPU (lists + image data)
-//   1F8010Bxh      DMA3 channel 3 - CDROM
-//   1F8010Cxh      DMA4 channel 4 - SPU
-//   1F8010Dxh      DMA5 channel 5 - PIO (Expansion Port)
-//   1F8010Exh      DMA6 channel 6 - OTC (reverse clear OT) (GPU related)
-//   1F8010F0h      DPCR - DMA Control register
-//   1F8010F4h      DICR - DMA Interrupt register
+const ADDR_DMA_START: u32 = 0x0080;
+const ADDR_DMA_END: u32 = 0x00ff;
+const ADDR_DMA_MDEC_IN: u32 = 0x0080; //  1F80108x DMA0 channel 0 - MDECin
+const ADDR_DMA_MDEC_OUT: u32 = 0x0090; // 1F80109x DMA1 channel 1 - MDECout
+const ADDR_DMA_GPU: u32 = 0x00a0; //      1F8010Ax DMA2 channel 2 - GPU (lists + image data)
+const ADDR_DMA_CDROM: u32 = 0x00b0; //    1F8010Bx DMA3 channel 3 - CDROM
+const ADDR_DMA_SPU: u32 = 0x00c0; //      1F8010Cx DMA4 channel 4 - SPU
+const ADDR_DMA_PIO: u32 = 0x00d0; //      1F8010Dx DMA5 channel 5 - PIO (Expansion Port)
+const ADDR_DMA_OTC: u32 = 0x00e0; //      1F8010Ex DMA6 channel 6 - OTC (reverse clear OT) (GPU related)
+const ADDR_DMA_DPCR: u32 = 0x00f0; //     1F8010F0 DPCR - DMA Control register
+const ADDR_DMA_DICR: u32 = 0x00f4; //     1F8010F4 DICR - DMA Interrupt register
 //   1F8010F8h      unknown
 //   1F8010FCh      unknown
 
 // Timers (aka Root counters)
 
-const TIM0_CUR_CNT_VAL: u32 = 0x0100; //   1f801100 2 Timer 0 Current Counter Value (R/W)  ;\
-const TIM0_CNT_MODE_ADDR: u32 = 0x0104; // 1f801104 2 Timer 0 Counter Mode          (R/W)  ; Dotclock
-const TIM0_CNT_TAR_VAL: u32 = 0x0108; //   1f801108 2 Timer 0 Counter Target Value  (R/W)  ;/
-const TIM1_CUR_CNT_VAL: u32 = 0x0110; //   1f801110 2 Timer 1 Current Counter Value (R/W)  ;\
-const TIM1_CNT_MODE_ADDR: u32 = 0x0114; // 1f801114 2 Timer 1 Counter Mode          (R/W)  ; Horizontal Retrace
-const TIM1_CNT_TAR_VAL: u32 = 0x0118; //   1f801118 2 Timer 1 Counter Target Value  (R/W)  ;/
-const TIM2_CUR_CNT_VAL: u32 = 0x0120; //   1f801120 2 Timer 2 Current Counter Value (R/W)  ;\
-const TIM2_CNT_MODE_ADDR: u32 = 0x0124; // 1f801124 2 Timer 2 Counter Mode          (R/W)  ; 1/8 system clock
-const TIM2_CNT_TAR_VAL: u32 = 0x0128; //   1f801128 2 Timer 2 Counter Target Value  (R/W)  ;/
+const ADDR_TIMERS_START: u32 = 0x0100;
+const ADDR_TIMERS_END: u32 = 0x0129;
+const ADDR_TIM0_CUR_CNT: u32 = 0x0100; //   1f801100 2 Timer 0 Current Counter Value (R/W)  ;\
+const ADDR_TIM0_CNT_MODE: u32 = 0x0104; //  1f801104 2 Timer 0 Counter Mode          (R/W)  ; Dotclock
+const ADDR_TIM0_CNT_TAR: u32 = 0x0108; //   1f801108 2 Timer 0 Counter Target Value  (R/W)  ;/
+const ADDR_TIM1_CUR_CNT: u32 = 0x0110; //   1f801110 2 Timer 1 Current Counter Value (R/W)  ;\
+const ADDR_TIM1_CNT_MODE: u32 = 0x0114; //  1f801114 2 Timer 1 Counter Mode          (R/W)  ; Horizontal Retrace
+const ADDR_TIM1_CNT_TAR: u32 = 0x0118; //   1f801118 2 Timer 1 Counter Target Value  (R/W)  ;/
+const ADDR_TIM2_CUR_CNT: u32 = 0x0120; //   1f801120 2 Timer 2 Current Counter Value (R/W)  ;\
+const ADDR_TIM2_CNT_MODE: u32 = 0x0124; //  1f801124 2 Timer 2 Counter Mode          (R/W)  ; 1/8 system clock
+const ADDR_TIM2_CNT_TAR: u32 = 0x0128; //   1f801128 2 Timer 2 Counter Target Value  (R/W)  ;/
 
 // CDROM Registers (Address.Read/Write.Index)
 
@@ -972,6 +1177,8 @@ const TIM2_CNT_TAR_VAL: u32 = 0x0128; //   1f801128 2 Timer 2 Counter Target Val
 
 // GPU Registers
 
+const ADDR_GPU_START: u32 = 0x0810;
+const ADDR_GPU_END: u32 = 0x0817;
 //   1F801810h.Write 4   GP0 Send GP0 Commands/Packets (Rendering and VRAM Access)
 //   1F801814h.Write 4   GP1 Send GP1 Commands (Display Control)
 //   1F801810h.Read  4   GPUREAD Read responses to GP0(C0h) and GP1(10h) commands
@@ -986,7 +1193,9 @@ const TIM2_CNT_TAR_VAL: u32 = 0x0128; //   1f801128 2 Timer 2 Counter Target Val
 
 // SPU Voice 0..23 Registers
 
-//   1F801C00h+N*10h 4   Voice 0..23 Volume Left/Right
+const ADDR_SPU_VOICE_START: u32 = 0x0c00;
+const ADDR_SPU_VOICE_END: u32 = 0x0d7f;
+//   0F801C00h+N*10h 4   Voice 0..23 Volume Left/Right
 //   1F801C04h+N*10h 2   Voice 0..23 ADPCM Sample Rate
 //   1F801C06h+N*10h 2   Voice 0..23 ADPCM Start Address
 //   1F801C08h+N*10h 4   Voice 0..23 ADSR Attack/Decay/Sustain/Release
@@ -995,24 +1204,27 @@ const TIM2_CNT_TAR_VAL: u32 = 0x0128; //   1f801128 2 Timer 2 Counter Target Val
 
 // SPU Control Registers
 
-const MAIN_VOL_LR_ADDR: u32 = 0x0d80; // 1f801d80 4 Main Volume Left/Right
-const REV_VOL_LR_ADDR: u32 = 0x0d84; // 1f801d84 4 Reverb Output Volume Left/Right
+const ADDR_SPU_CTL_START: u32 = 0x0d80;
+const ADDR_SPU_CTL_END: u32 = 0x0dbf;
+
+const ADDR_SPU_MAIN_VOL_LR: u32 = 0x0d80; // 1f801d80 4 Main Volume Left/Right
+const ADDR_SPU_REV_VOL_LR: u32 = 0x0d84; // 1f801d84 4 Reverb Output Volume Left/Right
 //   1F801D88h 4  Voice 0..23 Key ON (Start Attack/Decay/Sustain) (W)
-//   1F801D8Ch 4  Voice 0..23 Key OFF (Start Release) (W)
-//   1F801D90h 4  Voice 0..23 Channel FM (pitch lfo) mode (R/W)
-//   1F801D94h 4  Voice 0..23 Channel Noise mode (R/W)
-//   1F801D98h 4  Voice 0..23 Channel Reverb mode (R/W)
-//   1F801D9Ch 4  Voice 0..23 Channel ON/OFF (status) (R)
+const ADDR_SPU_VOICE_KEY_OFF: u32 = 0x0d8c; // 1F801D8Ch 4 Voice 0..23 Key OFF (Start Release) (W)
+const ADDR_SPU_VOICE_CHAN_FM: u32 = 0x0d90; // 1F801D90h 4 Voice 0..23 Channel FM (pitch lfo) mode (R/W)
+const ADDR_SPU_VOICE_NOISE_MODE: u32 = 0x0d94; // 1F801D94h 4 Voice 0..23 Channel Noise mode (R/W)
+const ADDR_SPU_VOICE_REV_MODE: u32 = 0x0d98; // 1F801D98h 4 Voice 0..23 Channel Reverb mode (R/W)
+const ADDR_SPU_VOICE_CHAN_STATUS: u32 = 0x0d9c; // 1F801D9Ch 4 Voice 0..23 Channel ON/OFF (status) (R)
 //   1F801DA0h 2  Unknown? (R) or (W)
 //   1F801DA2h 2  Sound RAM Reverb Work Area Start Address
 //   1F801DA4h 2  Sound RAM IRQ Address
-//   1F801DA6h 2  Sound RAM Data Transfer Address
-//   1F801DA8h 2  Sound RAM Data Transfer Fifo
-//   1F801DAAh 2  SPU Control Register (SPUCNT)
-//   1F801DACh 2  Sound RAM Data Transfer Control
-//   1F801DAEh 2  SPU Status Register (SPUSTAT) (R)
-//   1F801DB0h 4  CD Volume Left/Right
-//   1F801DB4h 4  Extern Volume Left/Right
+const ADDR_SPU_SND_RAM_DTA: u32 = 0x0da6; //   1F801DA6h 2  Sound RAM Data Transfer Address
+const ADDR_SPU_SND_RAM_DTF: u32 = 0x0da8; //   1F801DA8h 2  Sound RAM Data Transfer Fifo
+const ADDR_SPU_CNT: u32 = 0x0daa; // 1F801DAA 2 SPU Control Register (SPUCNT)
+const ADDR_SPU_SND_RAM_DTC: u32 = 0x0dac; //   1F801DACh 2  Sound RAM Data Transfer Control
+const ADDR_SPU_STAT: u32 = 0x0dae; // 1F801DAE 2 SPU Status Register (SPUSTAT) (R)
+const ADDR_SPU_CD_VOL_LR: u32 = 0x0db0; //   1F801DB0h 4  CD Volume Left/Right
+const ADDR_SPU_EXT_VOL_LR: u32 = 0x0db4; //   1F801DB4h 4  Extern Volume Left/Right
 //   1F801DB8h 4  Current Main Volume Left/Right
 //   1F801DBCh 4  Unknown? (R/W)
 
@@ -1091,7 +1303,7 @@ const REV_VOL_LR_ADDR: u32 = 0x0d84; // 1f801d84 4 Reverb Output Volume Left/Rig
 //   1F802004h 2 DTL-H2000: Whatever 16bit data ?
 //   1F802030h 1/4 DTL-H2000: Secondary IRQ10 Flags
 //   1F802032h 1 DTL-H2000: Whatever IRQ Control ?
-const DTL_H2000_BOOTMODE_ADDR: u32 = 0x1040; // 1f802040 1 DTL-H2000: Bootmode "Dip switches" (R)
+const ADDR_DTL_H2000_BOOTMODE: u32 = 0x1040; // 1f802040 1 DTL-H2000: Bootmode "Dip switches" (R)
 const DTL_H2000_PSX_POST: u32 = 0x1041; // 1f802041 1 PSX: POST (external 7 segment display, indicate BIOS boot status)
 //   1F802042h 1 DTL-H2000: POST/LED (similar to POST) (other addr, 2-digit wide)   1F802070h 1 PS2: POST2 (similar to POST, but PS2 BIOS uses this address)
 

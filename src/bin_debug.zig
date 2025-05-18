@@ -108,7 +108,7 @@ pub fn main() !void {
                 cpu.dbg_run();
             },
             .disasm => |a| {
-                try disasm_block(w, &cpu, cpu.pc, a.n);
+                try disasm_block(w, &cpu, cpu.next_pc, a.n);
             },
             .disasm_at => |a| {
                 try disasm_block(w, &cpu, a.addr, a.n);
@@ -260,7 +260,7 @@ fn disasm_block(writer: anytype, cpu: anytype, addr: u32, n: u32) !void {
     for (0..n) |i| {
         const i_u32: u32 = @intCast(i);
         const a: u32 = addr + i_u32 * 4;
-        const inst_raw = cpu.read(true, u32, a);
+        const inst_raw = try cpu.read(true, u32, a);
         const inst = decode(inst_raw);
         try print_disasm(writer, a, inst_raw, inst);
     }
@@ -274,7 +274,7 @@ fn dump(w: anytype, cpu: anytype, addr: u32, n: u32) !void {
         try w.print("{x:0>8}  ", .{p});
 
         for (0..16) |col| {
-            try w.print("{x:0>2} ", .{cpu.read(false, u8, p)});
+            try w.print("{x:0>2} ", .{try cpu.read(false, u8, p)});
             if (col == 7) {
                 try w.print(" ", .{});
             }
@@ -284,7 +284,7 @@ fn dump(w: anytype, cpu: anytype, addr: u32, n: u32) !void {
 
         try w.print("|", .{});
         for (0..16) |_| {
-            const b = cpu.read(false, u8, p);
+            const b = try cpu.read(false, u8, p);
             if (std.ascii.isPrint(b)) {
                 try w.print("{c}", .{b});
             } else {
