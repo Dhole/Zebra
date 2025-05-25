@@ -103,10 +103,10 @@ pub const Inst = union(enum) {
     swc0: ITypeArgs,
     mtc0: RTypeArgs,
     mfc0: RTypeArgs,
-    ctc0: RTypeArgs,
-    cfc0: RTypeArgs,
-    bc0f: ITypeArgs,
-    bc0t: ITypeArgs,
+    // ctc0: RTypeArgs,
+    // cfc0: RTypeArgs,
+    // bc0f: ITypeArgs,
+    // bc0t: ITypeArgs,
 
     lwc2: ITypeArgs,
     swc2: ITypeArgs,
@@ -114,13 +114,17 @@ pub const Inst = union(enum) {
     mfc2: RTypeArgs,
     ctc2: RTypeArgs,
     cfc2: RTypeArgs,
-    bc2f: ITypeArgs,
-    bc2t: ITypeArgs,
+    // bc2f: ITypeArgs,
+    // bc2t: ITypeArgs,
+
+    // Unsupporeted by PSX
+    cop1: JTypeArgs,
+    cop3: JTypeArgs,
 
     // System control
-    tlbr: RTypeArgs,
-    tlbwi: RTypeArgs,
-    tlbwr: RTypeArgs,
-    tlbp: RTypeArgs,
+    // tlbr: RTypeArgs,
+    // tlbwi: RTypeArgs,
+    // tlbwr: RTypeArgs,
+    // tlbp: RTypeArgs,
     rfe: RTypeArgs,
 };

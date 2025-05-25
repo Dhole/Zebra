@@ -265,6 +265,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         dbg: Dbg,
         regs: [32]u32, // Registers
         cop0: Cop0,
+        gpu: Gpu,
         pc: u32 = 0, // Current Program Counter
         next_pc: u32, // Next Program Counter
         next_next_pc: u32, // Next next Program Counter
@@ -299,6 +300,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .dbg = Dbg.init(allocator),
                 .regs = [_]u32{0} ** 32,
                 .cop0 = Cop0.init(),
+                .gpu = Gpu.init(),
                 .next_pc = pc,
                 .next_next_pc = pc +% 4,
                 .lo = 0,
@@ -369,10 +371,10 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 return;
             };
             self.pc = self.next_pc;
-            const inst = decode(inst_raw) orelse std.debug.panic("TODO: unknown inst {x:0>8}", .{inst_raw});
+            const maybe_inst = decode(inst_raw);
             if (self.cfg.dbg) {
                 if (self.dbg.trace_inst) {
-                    self.dbg_trace(inst, inst_raw) catch @panic("write");
+                    self.dbg_trace(maybe_inst, inst_raw) catch @panic("write");
                 }
                 if (!self.dbg._first_step) {
                     for (self.dbg.breaks.items) |addr| {
@@ -383,10 +385,18 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     }
                 }
             }
-            self.exec(inst);
+            if (maybe_inst) |inst| {
+                self.exec(inst);
+            } else {
+                self.exception(Exception.ri);
+            }
         }
 
-        fn dbg_trace(self: *Self, inst: Inst, inst_raw: u32) !void {
+        fn dbg_trace(self: *Self, maybe_inst: ?Inst, inst_raw: u32) !void {
+            const inst = maybe_inst orelse {
+                try self.dbg_w.print("{x:0>8}: {x:0>8} ???\n", .{ self.pc, inst_raw });
+                return;
+            };
             switch (inst) {
                 .j, .jal, .mfc0 => {
                     // duckstation compatible
@@ -554,6 +564,17 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     dst_r = a.rd;
                     dst_v = self.r(a.rs) -% self.r(a.rt);
                 },
+                .sub => |a| {
+                    const rs: i32 = @bitCast(self.r(a.rs));
+                    const rt: i32 = @bitCast(self.r(a.rt));
+                    const res, const ov = @subWithOverflow(rs, rt);
+                    if (ov == 0) {
+                        dst_r = a.rd;
+                        dst_v = @bitCast(res);
+                    } else {
+                        self.exception(Exception.ov);
+                    }
+                },
                 .slt => |a| {
                     const rs: i32 = @bitCast(self.r(a.rs));
                     const rt: i32 = @bitCast(self.r(a.rt));
@@ -592,9 +613,27 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     dst_r = a.rt;
                     dst_v = self.r(a.rs) | @as(u32, imm);
                 },
+                .xor => |a| {
+                    dst_r = a.rd;
+                    dst_v = self.r(a.rs) ^ self.r(a.rt);
+                },
+                .xori => |a| {
+                    const imm: u16 = @bitCast(a.imm);
+                    dst_r = a.rt;
+                    dst_v = self.r(a.rs) ^ @as(u32, imm);
+                },
                 .nor => |a| {
                     dst_r = a.rd;
                     dst_v = ~(self.r(a.rs) | self.r(a.rt));
+                },
+                .mult => |a| {
+                    const rs_i32: i32 = @bitCast(self.r(a.rs));
+                    const rt_i32: i32 = @bitCast(self.r(a.rt));
+                    const rs: i64 = @as(i64, rs_i32);
+                    const rt: i64 = @as(i64, rt_i32);
+                    const res: u64 = @bitCast(rs * rt);
+                    self.hi = @intCast(res >> 32);
+                    self.lo = @intCast(res & 0xffff_ffff);
                 },
                 .multu => |a| {
                     const rs: u64 = @as(u64, self.r(a.rs));
@@ -711,6 +750,42 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                         self.exception(Exception.adel);
                     }
                 },
+                .lwl => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    const addr = self.r(a.rs) +% offset;
+                    // Reat the word at an aligned address
+                    const word = self.read(false, u32, addr & ~@as(u32, 0b11)) catch unreachable;
+                    // Get the register value that will be updated.  Read from
+                    // the delay slot so that lwl and lwr work in a chain.
+                    const cur_v = if (a.rt[0] == self.delay_dst_r[0]) self.delay_dst_v else self.r(a.rt);
+                    const v = switch (addr & 0b11) {
+                        0 => (cur_v & 0x00ff_ffff) | (word << 24),
+                        1 => (cur_v & 0x0000_ffff) | (word << 16),
+                        2 => (cur_v & 0x0000_00ff) | (word << 8),
+                        3 => (cur_v & 0x0000_0000) | (word << 0),
+                        else => unreachable,
+                    };
+                    delay_dst_r = a.rt;
+                    delay_dst_v = v;
+                },
+                .lwr => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    const addr = self.r(a.rs) +% offset;
+                    // Reat the word at an aligned address
+                    const word = self.read(false, u32, addr & ~@as(u32, 0b11)) catch unreachable;
+                    // Get the register value that will be updated.  Read from
+                    // the delay slot so that lwl and lwr work in a chain.
+                    const cur_v = if (a.rt[0] == self.delay_dst_r[0]) self.delay_dst_v else self.r(a.rt);
+                    const v = switch (addr & 0b11) {
+                        0 => (cur_v & 0x0000_0000) | (word >> 0),
+                        1 => (cur_v & 0xff00_0000) | (word >> 8),
+                        2 => (cur_v & 0xffff_0000) | (word >> 16),
+                        3 => (cur_v & 0xffff_ff00) | (word >> 24),
+                        else => unreachable,
+                    };
+                    delay_dst_r = a.rt;
+                    delay_dst_v = v;
+                },
                 .sw => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
                     self.write(u32, self.r(a.rs) +% offset, self.r(a.rt)) catch {
@@ -726,6 +801,42 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .sb => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
                     self.write(u8, self.r(a.rs) +% offset, @intCast(self.r(a.rt) & 0xff)) catch {
+                        self.exception(Exception.ades);
+                    };
+                },
+                .swl => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    const addr = self.r(a.rs) +% offset;
+                    const addr_aligned = addr & ~@as(u32, 0b11);
+                    // Reat the word at an aligned address
+                    const cur_word = self.read(false, u32, addr_aligned) catch unreachable;
+                    const v = self.r(a.rt);
+                    const word = switch (addr & 0b11) {
+                        0 => (cur_word & 0xffff_ff00) | (v >> 24),
+                        1 => (cur_word & 0xffff_0000) | (v >> 16),
+                        2 => (cur_word & 0xff00_0000) | (v >> 8),
+                        3 => (cur_word & 0x0000_0000) | (v >> 0),
+                        else => unreachable,
+                    };
+                    self.write(u32, addr_aligned, word) catch {
+                        self.exception(Exception.ades);
+                    };
+                },
+                .swr => |a| {
+                    const offset: u32 = @bitCast(@as(i32, a.imm));
+                    const addr = self.r(a.rs) +% offset;
+                    const addr_aligned = addr & ~@as(u32, 0b11);
+                    // Reat the word at an aligned address
+                    const cur_word = self.read(false, u32, addr_aligned) catch unreachable;
+                    const v = self.r(a.rt);
+                    const word = switch (addr & 0b11) {
+                        0 => (cur_word & 0x0000_0000) | (v << 0),
+                        1 => (cur_word & 0x0000_00ff) | (v << 8),
+                        2 => (cur_word & 0x0000_ffff) | (v << 16),
+                        3 => (cur_word & 0x00ff_ffff) | (v << 24),
+                        else => unreachable,
+                    };
+                    self.write(u32, addr_aligned, word) catch {
                         self.exception(Exception.ades);
                     };
                 },
@@ -762,6 +873,11 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     const rs: i32 = @bitCast(self.r(a.rs));
                     self.branch_cmp(rs >= 0, a.imm);
                 },
+                .bgezal => |a| {
+                    self.set_r(.{31}, self.pc +% 8);
+                    const rs: i32 = @bitCast(self.r(a.rs));
+                    self.branch_cmp(rs >= 0, a.imm);
+                },
                 .bltz => |a| {
                     const rs: i32 = @bitCast(self.r(a.rs));
                     self.branch_cmp(rs < 0, a.imm);
@@ -769,6 +885,73 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .blez => |a| {
                     const rs: i32 = @bitCast(self.r(a.rs));
                     self.branch_cmp(rs <= 0, a.imm);
+                },
+                .bltzal => |a| {
+                    self.set_r(.{31}, self.pc +% 8);
+                    const rs: i32 = @bitCast(self.r(a.rs));
+                    self.branch_cmp(rs < 0, a.imm);
+                },
+                // Coprocessor
+                .mtc0 => |a| {
+                    if (a.imm != 0) {
+                        std.debug.panic("TODO: mtc0 with sel={} at pc={x:0>8}", .{ a.imm, self.pc });
+                    }
+                    self.cop0.set_r(a.rd, self.r(a.rt));
+                },
+                .mfc0 => |a| {
+                    if (a.imm != 0) {
+                        std.debug.panic("TODO: mfc0 with sel={} at pc={x:0>8}", .{ a.imm, self.pc });
+                    }
+                    const v_c0 = self.cop0.r(a.rd);
+
+                    delay_dst_r = a.rt;
+                    delay_dst_v = v_c0;
+                },
+                .lwc0 => |a| {
+                    _ = a; // unused
+                    self.exception(Exception.cpu);
+                },
+                .swc0 => |a| {
+                    _ = a; // unused
+                    self.exception(Exception.cpu);
+                },
+                .lwc2 => |a| {
+                    // Load Word To Coprocessor 2
+                    _ = a; // unused
+                    std.debug.panic("TODO: lwc2 at pc={x:0>8}", .{self.pc});
+                },
+                .swc2 => |a| {
+                    // Store Word From Coprocessor 2
+                    _ = a; // unused
+                    std.debug.panic("TODO: swc2 at pc={x:0>8}", .{self.pc});
+                },
+                .mtc2 => |a| {
+                    // Move To Coprocessor 2
+                    _ = a; // unused
+                    std.debug.panic("TODO: mtc2 at pc={x:0>8}", .{self.pc});
+                },
+                .mfc2 => |a| {
+                    // Move From Coprocessor 2
+                    _ = a; // unused
+                    std.debug.panic("TODO: mfc2 at pc={x:0>8}", .{self.pc});
+                },
+                .ctc2 => |a| {
+                    // Move Control Word To Coprocessor 2
+                    _ = a; // unused
+                    std.debug.panic("TODO: ctc2 at pc={x:0>8}", .{self.pc});
+                },
+                .cfc2 => |a| {
+                    // Move Control Word From Coprocessor 2
+                    _ = a; // unused
+                    std.debug.panic("TODO: cfc2 at pc={x:0>8}", .{self.pc});
+                },
+                .cop1 => |a| {
+                    _ = a; // unused
+                    self.exception(Exception.cpu);
+                },
+                .cop3 => |a| {
+                    _ = a; // unused
+                    self.exception(Exception.cpu);
                 },
                 // Other
                 .rfe => |a| {
@@ -792,30 +975,15 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .mthi => |a| {
                     self.hi = self.r(a.rs);
                 },
-                .mtc0 => |a| {
-                    if (a.imm != 0) {
-                        std.debug.panic("TODO: mtc0 with sel={} at pc={x:0>8}", .{ a.imm, self.pc });
-                    }
-                    self.cop0.set_r(a.rd, self.r(a.rt));
-                },
-                .mfc0 => |a| {
-                    if (a.imm != 0) {
-                        std.debug.panic("TODO: mfc0 with sel={} at pc={x:0>8}", .{ a.imm, self.pc });
-                    }
-                    const v_c0 = self.cop0.r(a.rd);
-
-                    delay_dst_r = a.rt;
-                    delay_dst_v = v_c0;
-                },
-                .bc0f => |a| {
-                    _ = a;
-                    // TODO
-                },
                 .sys => |a| {
                     _ = a; // unused
                     self.exception(Exception.syscall);
                 },
-                else => std.debug.panic("TODO: inst {?} at pc={x:0>8}", .{ inst, self.pc }),
+                .brk => |a| {
+                    _ = a; // unused
+                    self.exception(Exception.bp);
+                },
+                // else => std.debug.panic("TODO: inst {?} at pc={x:0>8}", .{ inst, self.pc }),
             }
             return .{ dst_r, dst_v, delay_dst_r, delay_dst_v };
         }
@@ -923,7 +1091,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     else => @compileError("invalid T"),
                 };
             } else if (ADDR_IO_PORTS <= paddr and paddr < ADDR_IO_PORTS + SIZE_IO_PORTS) {
-                return self.io_regs_read(T, paddr - ADDR_IO_PORTS);
+                return self.io_regs_read(T, @intCast(paddr - ADDR_IO_PORTS));
             } else if (ADDR_CACHECTL <= paddr and paddr < ADDR_CACHECTL + SIZE_CACHECTL) {
                 std.debug.print("TODO: read {s} at CACHECTL {x:0>8}\n", .{ @typeName(T), addr });
                 return 0;
@@ -945,7 +1113,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             if (ADDR_RAM <= paddr and paddr < ADDR_RAM + SIZE_RAM) {
                 self.ram_write(T, paddr - ADDR_RAM, v);
             } else if (ADDR_IO_PORTS <= paddr and paddr < ADDR_IO_PORTS + SIZE_IO_PORTS) {
-                self.io_regs_write(T, paddr - ADDR_IO_PORTS, v);
+                self.io_regs_write(T, @intCast(paddr - ADDR_IO_PORTS), v);
             } else if (ADDR_CACHECTL <= paddr and paddr < ADDR_CACHECTL + SIZE_CACHECTL) {
                 std.debug.print("TODO: write {s} at CACHECTL {x:0>8} value {x:0>8}\n", .{ @typeName(T), addr, v });
                 // TODO
@@ -955,7 +1123,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             }
         }
 
-        fn io_regs_read(self: *Self, comptime T: type, addr: u32) T {
+        fn io_regs_read(self: *Self, comptime T: type, addr: u16) T {
             if (self.cfg.dbg) {
                 if (self.dbg.trace_io) {
                     std.debug.print("io read {s} at {x:0>8}\n", .{ @typeName(T), addr + ADDR_IO_PORTS });
@@ -985,8 +1153,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     ADDR_DMA_START...ADDR_DMA_END => {
                         std.debug.print("TODO: io_regs_read u32 ADDR_DMA_START...ADDR_DMA_END {x:0>8}\n", .{addr + ADDR_IO_PORTS});
                     },
-                    ADDR_GPU_START...ADDR_GPU_END => {
-                        std.debug.print("TODO: io_regs_read u32 ADDR_GPU_START...ADDR_GPU_END {x:0>8}\n", .{addr + ADDR_IO_PORTS});
+                    Gpu.ADDR_START...Gpu.ADDR_END => {
+                        return self.gpu.read_u32(addr);
                     },
                     else => std.debug.panic("TODO: io_regs_read u32 addr {x:0>8}\n", .{addr + ADDR_IO_PORTS}),
                 },
@@ -995,7 +1163,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             return 0;
         }
 
-        fn io_regs_write(self: *Self, comptime T: type, addr: u32, v: T) void {
+        fn io_regs_write(self: *Self, comptime T: type, addr: u16, v: T) void {
             if (self.cfg.dbg) {
                 if (self.dbg.trace_io) {
                     std.debug.print("io write {s} {x:0>8} at {x:0>8}\n", .{ @typeName(T), v, addr + ADDR_IO_PORTS });
@@ -1018,8 +1186,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     ADDR_SPU_VOICE_START...ADDR_SPU_VOICE_END => {
                         std.debug.print("TODO: io_regs_write u16 ADDR_SPU_VOICE_START...ADDR_SPU_VOICE_END {x:0>8} value {x:0>8}\n", .{ addr + ADDR_IO_PORTS, v });
                     },
-                    ADDR_SPU_MAIN_VOL_LR...ADDR_SPU_CTL_END => {
-                        std.debug.print("TODO: io_regs_write u16 ADDR_SPU_MAIN_VOL_LR...ADDR_SPU_CTL_REG_END {x:0>8} value {x:0>8}\n", .{ addr + ADDR_IO_PORTS, v });
+                    ADDR_SPU_CTL_START...ADDR_SPU_CTL_END => {
+                        std.debug.print("TODO: io_regs_write u16 ADDR_SPU_CTL_START...ADDR_SPU_CTL_END {x:0>8} value {x:0>8}\n", .{ addr + ADDR_IO_PORTS, v });
                     },
                     else => std.debug.panic("TODO: io_regs_write u16 addr {x:0>8} value {x:0>4}\n", .{ addr + ADDR_IO_PORTS, v }),
                 },
@@ -1073,8 +1241,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     ADDR_SPU_MAIN_VOL_LR => {
                         std.debug.print("TODO: io_regs_write u32 ADDR_SPU_MAIN_VOL_LR value {x:0>8}\n", .{v});
                     },
-                    ADDR_GPU_START...ADDR_GPU_END => {
-                        std.debug.print("TODO: io_regs_write u32 ADDR_GPU_START...ADDR_GPU_END {x:0>8} value {x:0>8}\n", .{ addr + ADDR_IO_PORTS, v });
+                    Gpu.ADDR_START...Gpu.ADDR_END => {
+                        self.gpu.write_u32(addr, v);
                     },
                     else => std.debug.panic("TODO: io_regs_write u32 addr {x:0>8} value {x:0>8}\n", .{ addr + ADDR_IO_PORTS, v }),
                 },
@@ -1177,12 +1345,57 @@ const ADDR_TIM2_CNT_TAR: u32 = 0x0128; //   1f801128 2 Timer 2 Counter Target Va
 
 // GPU Registers
 
-const ADDR_GPU_START: u32 = 0x0810;
-const ADDR_GPU_END: u32 = 0x0817;
-//   1F801810h.Write 4   GP0 Send GP0 Commands/Packets (Rendering and VRAM Access)
-//   1F801814h.Write 4   GP1 Send GP1 Commands (Display Control)
-//   1F801810h.Read  4   GPUREAD Read responses to GP0(C0h) and GP1(10h) commands
-//   1F801814h.Read  4   GPUSTAT Read GPU Status Register
+const Gpu = struct {
+    const ADDR_START: u16 = 0x0810;
+    const ADDR_END: u16 = 0x0817;
+
+    const RegRead = enum(u16) {
+        read = 0x0810, // 1F801810.Read  4 GPUREAD Read responses to GP0(C0h) and GP1(10h) commands
+        stat = 0x0814, // 1F801814.Read  4 GPUSTAT Read GPU Status Register
+        _,
+    };
+    const RegWrite = enum(u16) {
+        gp0 = 0x0810, //  1F801810.Write 4 GP0 Send GP0 Commands/Packets (Rendering and VRAM Access)
+        gp1 = 0x0814, //  1F801814.Write 4 GP1 Send GP1 Commands (Display Control)
+        _,
+    };
+
+    const Self = @This();
+
+    fn init() Self {
+        return Self{};
+    }
+
+    fn read_u32(self: *Self, addr: u16) u32 {
+        _ = self;
+        const reg: RegRead = @enumFromInt(addr);
+        switch (reg) {
+            RegRead.read => {
+                std.debug.print("TODO: gpu.read_u32 READ\n", .{});
+                return 0;
+            },
+            RegRead.stat => {
+                std.debug.print("TODO: gpu.read_u32 STAT\n", .{});
+                // Set bit 28 to signal that the GPU is ready to receive DMA blocks
+                return 0x1000_0000;
+            },
+            _ => unreachable,
+        }
+    }
+    fn write_u32(self: *Self, addr: u16, v: u32) void {
+        _ = self;
+        const reg: RegWrite = @enumFromInt(addr);
+        switch (reg) {
+            RegWrite.gp0 => {
+                std.debug.print("TODO: gpu.write_u32 GP0 value {x:0>8}\n", .{v});
+            },
+            RegWrite.gp1 => {
+                std.debug.print("TODO: gpu.write_u32 GP1 value {x:0>8}\n", .{v});
+            },
+            _ => unreachable,
+        }
+    }
+};
 
 // MDEC Registers
 

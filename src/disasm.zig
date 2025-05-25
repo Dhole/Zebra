@@ -253,27 +253,29 @@ pub const FmtInst = struct {
             .swc0 => |a| fmt_i_ld_st_type(writer, "swc0", a),
             .mtc0 => |a| fmt_mtc(writer, "mtc0", a),
             .mfc0 => |a| fmt_mfc(writer, "mfc0", a),
-            .ctc0 => |a| fmt_r_type(writer, "ctc0", a),
-            .cfc0 => |a| fmt_r_type(writer, "cfc0", a),
-            .bc0f => |a| fmt_i_type(writer, "bc0f", a),
-            .bc0t => |a| fmt_i_type(writer, "bc0t", a),
+            // .ctc0 => |a| fmt_r_type(writer, "ctc0", a),
+            // .cfc0 => |a| fmt_r_type(writer, "cfc0", a),
+            // .bc0f => |a| fmt_i_type(writer, "bc0f", a),
+            // .bc0t => |a| fmt_i_type(writer, "bc0t", a),
             .lwc2 => |a| fmt_i_ld_st_type(writer, "lwc2", a),
             .swc2 => |a| fmt_i_ld_st_type(writer, "swc2", a),
             .mtc2 => |a| fmt_mtc(writer, "mtc2", a),
             .mfc2 => |a| fmt_mfc(writer, "mfc2", a),
             .ctc2 => |a| fmt_r_type(writer, "ctc2", a),
             .cfc2 => |a| fmt_r_type(writer, "cfc2", a),
-            .bc2f => |a| fmt_i_type(writer, "bc2f", a),
-            .bc2t => |a| fmt_i_type(writer, "bc2t", a),
-            .tlbr => |a| fmt_r_type(writer, "tlbr", a),
-            .tlbwi => |a| fmt_r_type(writer, "tlbwi", a),
-            .tlbwr => |a| fmt_r_type(writer, "tlbwr", a),
-            .tlbp => |a| fmt_r_type(writer, "tlbp", a),
+            // .bc2f => |a| fmt_i_type(writer, "bc2f", a),
+            // .bc2t => |a| fmt_i_type(writer, "bc2t", a),
+            .cop1 => |_| writer.print("invalid: cop1 instr", .{}),
+            .cop3 => |_| writer.print("invalid: cop3 instr", .{}),
+            // .tlbr => |a| fmt_r_type(writer, "tlbr", a),
+            // .tlbwi => |a| fmt_r_type(writer, "tlbwi", a),
+            // .tlbwr => |a| fmt_r_type(writer, "tlbwr", a),
+            // .tlbp => |a| fmt_r_type(writer, "tlbp", a),
             .rfe => |a| fmt_r_type(writer, "rfe", a),
         };
     }
 };
 
 pub fn print_disasm(writer: anytype, pc: u32, inst_raw: u32, inst: ?Inst) !void {
-    writer.print("{x:0>8}: {x:0>8} {}", .{ pc, inst_raw, fmt_inst(inst, pc) }) catch @panic("write");
+    try writer.print("{x:0>8}: {x:0>8} {}", .{ pc, inst_raw, fmt_inst(inst, pc) });
 }
