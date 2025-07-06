@@ -17,6 +17,12 @@ const fmt_reg = disasm.fmt_reg;
 const fmt_inst = disasm.fmt_inst;
 const print_disasm = disasm.print_disasm;
 
+const dma = @import("dma.zig");
+const Dma = dma.Dma;
+
+const gpu = @import("gpu.zig");
+const Gpu = gpu.Gpu;
+
 pub const SIZE_RAM: usize = 4 * 512 * 1024; // 2 MiB
 pub const SIZE_BIOS: usize = 512 * 1024; // 512 KiB
 pub const SIZE_EXP_REG1: usize = 8 * 1024; // 8 KiB
@@ -265,6 +271,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         dbg: Dbg,
         regs: [32]u32, // Registers
         cop0: Cop0,
+        dma: Dma,
         gpu: Gpu,
         pc: u32 = 0, // Current Program Counter
         next_pc: u32, // Next Program Counter
@@ -298,8 +305,9 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .dbg_w = dbg_writer,
                 .cfg = cfg,
                 .dbg = Dbg.init(allocator),
-                .regs = [_]u32{0} ** 32,
+                .regs = .{0} ** 32,
                 .cop0 = Cop0.init(),
+                .dma = Dma.init(),
                 .gpu = Gpu.init(),
                 .next_pc = pc,
                 .next_next_pc = pc +% 4,
@@ -1150,8 +1158,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     ADDR_I_MASK => {
                         std.debug.print("TODO: io_regs_read u32 ADDR_I_MASK\n", .{});
                     },
-                    ADDR_DMA_START...ADDR_DMA_END => {
-                        std.debug.print("TODO: io_regs_read u32 ADDR_DMA_START...ADDR_DMA_END {x:0>8}\n", .{addr + ADDR_IO_PORTS});
+                    Dma.ADDR_START...Dma.ADDR_END => {
+                        return self.dma.read_u32(addr);
                     },
                     Gpu.ADDR_START...Gpu.ADDR_END => {
                         return self.gpu.read_u32(addr);
@@ -1192,8 +1200,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     else => std.debug.panic("TODO: io_regs_write u16 addr {x:0>8} value {x:0>4}\n", .{ addr + ADDR_IO_PORTS, v }),
                 },
                 u32 => switch (addr) {
-                    ADDR_DMA_START...ADDR_DMA_END => {
-                        std.debug.print("TODO: io_regs_write u32 ADDR_DMA_START...ADDR_DMA_END {x:0>8} value {x:0>8}\n", .{ addr + ADDR_IO_PORTS, v });
+                    Dma.ADDR_START...Dma.ADDR_END => {
+                        self.dma.write_u32(addr, v);
                     },
                     ADDR_TIMERS_START...ADDR_TIMERS_END => {
                         std.debug.print("TODO: io_regs_write u32 ADDR_TIMERS_START...ADDR_TIMERS_END {x:0>8} value {x:0>8}\n", .{ addr + ADDR_IO_PORTS, v });
@@ -1291,22 +1299,6 @@ const ADDR_RAM_SIZE: u32 = 0x0060; // 1f801060 4/2 RAM_SIZE (usually 00000B88h; 
 const ADDR_I_STAT: u32 = 0x0070; // 1f801070 2 I_STAT - Interrupt status register
 const ADDR_I_MASK: u32 = 0x0074; // 1f801074 2 I_MASK - Interrupt mask register
 
-// DMA Registers
-
-const ADDR_DMA_START: u32 = 0x0080;
-const ADDR_DMA_END: u32 = 0x00ff;
-const ADDR_DMA_MDEC_IN: u32 = 0x0080; //  1F80108x DMA0 channel 0 - MDECin
-const ADDR_DMA_MDEC_OUT: u32 = 0x0090; // 1F80109x DMA1 channel 1 - MDECout
-const ADDR_DMA_GPU: u32 = 0x00a0; //      1F8010Ax DMA2 channel 2 - GPU (lists + image data)
-const ADDR_DMA_CDROM: u32 = 0x00b0; //    1F8010Bx DMA3 channel 3 - CDROM
-const ADDR_DMA_SPU: u32 = 0x00c0; //      1F8010Cx DMA4 channel 4 - SPU
-const ADDR_DMA_PIO: u32 = 0x00d0; //      1F8010Dx DMA5 channel 5 - PIO (Expansion Port)
-const ADDR_DMA_OTC: u32 = 0x00e0; //      1F8010Ex DMA6 channel 6 - OTC (reverse clear OT) (GPU related)
-const ADDR_DMA_DPCR: u32 = 0x00f0; //     1F8010F0 DPCR - DMA Control register
-const ADDR_DMA_DICR: u32 = 0x00f4; //     1F8010F4 DICR - DMA Interrupt register
-//   1F8010F8h      unknown
-//   1F8010FCh      unknown
-
 // Timers (aka Root counters)
 
 const ADDR_TIMERS_START: u32 = 0x0100;
@@ -1342,60 +1334,6 @@ const ADDR_TIM2_CNT_TAR: u32 = 0x0128; //   1f801128 2 Timer 2 Counter Target Va
 //   1F801801h.W.3   1   CD Audio Volume for Right-CD-Out to Right-SPU-Input (W)
 //   1F801802h.W.3   1   CD Audio Volume for Right-CD-Out to Left-SPU-Input (W)
 //   1F801803h.W.3   1   CD Audio Volume Apply Changes (by writing bit5=1)
-
-// GPU Registers
-
-const Gpu = struct {
-    const ADDR_START: u16 = 0x0810;
-    const ADDR_END: u16 = 0x0817;
-
-    const RegRead = enum(u16) {
-        read = 0x0810, // 1F801810.Read  4 GPUREAD Read responses to GP0(C0h) and GP1(10h) commands
-        stat = 0x0814, // 1F801814.Read  4 GPUSTAT Read GPU Status Register
-        _,
-    };
-    const RegWrite = enum(u16) {
-        gp0 = 0x0810, //  1F801810.Write 4 GP0 Send GP0 Commands/Packets (Rendering and VRAM Access)
-        gp1 = 0x0814, //  1F801814.Write 4 GP1 Send GP1 Commands (Display Control)
-        _,
-    };
-
-    const Self = @This();
-
-    fn init() Self {
-        return Self{};
-    }
-
-    fn read_u32(self: *Self, addr: u16) u32 {
-        _ = self;
-        const reg: RegRead = @enumFromInt(addr);
-        switch (reg) {
-            RegRead.read => {
-                std.debug.print("TODO: gpu.read_u32 READ\n", .{});
-                return 0;
-            },
-            RegRead.stat => {
-                std.debug.print("TODO: gpu.read_u32 STAT\n", .{});
-                // Set bit 28 to signal that the GPU is ready to receive DMA blocks
-                return 0x1000_0000;
-            },
-            _ => unreachable,
-        }
-    }
-    fn write_u32(self: *Self, addr: u16, v: u32) void {
-        _ = self;
-        const reg: RegWrite = @enumFromInt(addr);
-        switch (reg) {
-            RegWrite.gp0 => {
-                std.debug.print("TODO: gpu.write_u32 GP0 value {x:0>8}\n", .{v});
-            },
-            RegWrite.gp1 => {
-                std.debug.print("TODO: gpu.write_u32 GP1 value {x:0>8}\n", .{v});
-            },
-            _ => unreachable,
-        }
-    }
-};
 
 // MDEC Registers
 
