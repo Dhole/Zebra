@@ -1,8 +1,8 @@
 const std = @import("std");
 
-pub const RegIdx = struct { u8 };
+pub const RegIdx = struct { u5 };
 
-pub fn r(idx: u8) RegIdx {
+pub fn r(idx: u5) RegIdx {
     return RegIdx{idx};
 }
 

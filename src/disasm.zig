@@ -65,7 +65,6 @@ pub const FmtReg = struct {
             29 => "sp",
             30 => "fp",
             31 => "ra",
-            else => unreachable,
         };
         try writer.print("{s}", .{name});
         // try writer.print("r{d}", .{self.i});
