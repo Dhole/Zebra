@@ -1,6 +1,6 @@
 const std = @import("std");
 const log = std.log;
-const mem = std.mem;
+const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 
 const root = @import("root.zig");
@@ -8,6 +8,7 @@ const Inst = root.Inst;
 const RegIdx = root.RegIdx;
 const InstArgs = root.InstArgs;
 const Op = root.Op;
+const buf_read = root.buf_read;
 
 const decoder = @import("decoder.zig");
 const decode = decoder.decode;
@@ -17,13 +18,16 @@ const fmt_reg = disasm.fmt_reg;
 const fmt_inst = disasm.fmt_inst;
 const print_disasm = disasm.print_disasm;
 
+const _ram = @import("ram.zig");
+const Ram = _ram.Ram;
+const SIZE_RAM = _ram.SIZE_RAM;
+
 const dma = @import("dma.zig");
 const Dma = dma.Dma;
 
 const gpu = @import("gpu.zig");
 const Gpu = gpu.Gpu;
 
-pub const SIZE_RAM: usize = 4 * 512 * 1024; // 2 MiB
 pub const SIZE_BIOS: usize = 512 * 1024; // 512 KiB
 pub const SIZE_EXP_REG1: usize = 8 * 1024; // 8 KiB
 pub const SIZE_SCRATCH: usize = 1024; // 1 KiB
@@ -67,35 +71,6 @@ fn vaddr_to_paddr(vaddr: u32) struct { usize, u32 } {
     return .{ region, paddr };
 }
 
-fn buf_read(comptime T: type, buf: []const u8, addr: u32) T {
-    return switch (T) {
-        u8 => buf[addr],
-        u16 => @as(u16, buf[addr]) + @as(u16, buf[addr + 1]) * 0x100,
-        u32 => @as(u32, buf[addr]) + @as(u32, buf[addr + 1]) * 0x100 +
-            @as(u32, buf[addr + 2]) * 0x10000 + @as(u32, buf[addr + 3]) * 0x1000000,
-        else => @compileError("invalid T"),
-    };
-}
-
-fn buf_write(comptime T: type, buf: []u8, addr: u32, v: T) void {
-    switch (T) {
-        u8 => {
-            buf[addr] = @intCast(v);
-        },
-        u16 => {
-            buf[addr + 0] = @intCast((v & 0x00ff) >> 0);
-            buf[addr + 1] = @intCast((v & 0xff00) >> 8);
-        },
-        u32 => {
-            buf[addr + 0] = @intCast((v & 0x000000ff) >> 0);
-            buf[addr + 1] = @intCast((v & 0x0000ff00) >> 8);
-            buf[addr + 2] = @intCast((v & 0x00ff0000) >> 16);
-            buf[addr + 3] = @intCast((v & 0xff000000) >> 24);
-        },
-        else => @compileError("invalid T"),
-    }
-}
-
 pub const Cfg = struct {
     dbg: bool = false,
 };
@@ -107,7 +82,7 @@ const Dbg = struct {
     _break: bool = false,
     _first_step: bool = true,
 
-    fn init(allocator: mem.Allocator) Dbg {
+    fn init(allocator: Allocator) Dbg {
         return Dbg{
             .breaks = ArrayList(u32).init(allocator),
         };
@@ -283,21 +258,20 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         delay_dst_r: RegIdx = .{0}, // register to update from a load delay
         delay_dst_v: u32 = 0, // value from a load delay
         bios: []const u8,
-        ram: []u8,
-        allocator: mem.Allocator,
+        ram: Ram,
+        allocator: Allocator,
 
         const Self = @This();
 
         pub fn init(
-            allocator: mem.Allocator,
+            allocator: Allocator,
             bios: []const u8,
             dbg_writer: dbg_writer_type,
         ) !Self {
             if (bios.len != SIZE_BIOS) {
                 return error.BiosInvalidSize;
             }
-            const ram = try allocator.alloc(u8, SIZE_RAM);
-            @memset(ram, 0);
+            const ram = try Ram.init(allocator);
             const bios_copy = try allocator.alloc(u8, SIZE_BIOS);
             std.mem.copyForwards(u8, bios_copy, bios);
             const pc = VADDR_RESET;
@@ -307,7 +281,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .dbg = Dbg.init(allocator),
                 .regs = .{0} ** 32,
                 .cop0 = Cop0.init(),
-                .dma = Dma.init(),
+                .dma = Dma.init(ram),
                 .gpu = Gpu.init(),
                 .next_pc = pc,
                 .next_next_pc = pc +% 4,
@@ -321,7 +295,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.allocator.free(self.ram);
+            self.ram.deinit();
             self.allocator.free(self.bios);
             self.dbg.deinit();
         }
@@ -1062,14 +1036,6 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             }
         }
 
-        fn ram_read(self: *Self, comptime T: type, addr: u32) T {
-            return buf_read(T, self.ram, addr);
-        }
-
-        fn ram_write(self: *Self, comptime T: type, addr: u32, v: T) void {
-            buf_write(T, self.ram, addr, v);
-        }
-
         fn bios_read(self: *Self, comptime T: type, addr: u32) T {
             return buf_read(T, self.bios, addr);
         }
@@ -1087,7 +1053,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             const region, const paddr = vaddr_to_paddr(addr);
             _ = region;
             if (ADDR_RAM <= paddr and paddr < SIZE_RAM) {
-                return self.ram_read(T, paddr - ADDR_RAM);
+                return self.ram.read(T, paddr - ADDR_RAM);
             } else if (ADDR_BIOS <= paddr and paddr < ADDR_BIOS + SIZE_BIOS) {
                 return self.bios_read(T, paddr - ADDR_BIOS);
             } else if (ADDR_EXP_REG1 <= paddr and paddr < ADDR_EXP_REG1 + SIZE_EXP_REG1) {
@@ -1119,7 +1085,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             const region, const paddr = vaddr_to_paddr(addr);
             _ = region;
             if (ADDR_RAM <= paddr and paddr < ADDR_RAM + SIZE_RAM) {
-                self.ram_write(T, paddr - ADDR_RAM, v);
+                self.ram.write(T, paddr - ADDR_RAM, v);
             } else if (ADDR_IO_PORTS <= paddr and paddr < ADDR_IO_PORTS + SIZE_IO_PORTS) {
                 self.io_regs_write(T, @intCast(paddr - ADDR_IO_PORTS), v);
             } else if (ADDR_CACHECTL <= paddr and paddr < ADDR_CACHECTL + SIZE_CACHECTL) {
@@ -1157,6 +1123,9 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 u32 => switch (addr) {
                     ADDR_I_MASK => {
                         std.debug.print("TODO: io_regs_read u32 ADDR_I_MASK\n", .{});
+                    },
+                    ADDR_TIMERS_START...ADDR_TIMERS_END => {
+                        std.debug.print("TODO: io_regs_read u32 ADDR_TIMERS_START...ADDR_TIMERS_END {x:0>8}\n", .{addr + ADDR_IO_PORTS});
                     },
                     Dma.ADDR_START...Dma.ADDR_END => {
                         return self.dma.read_u32(addr);

@@ -1,5 +1,8 @@
 const std = @import("std");
 
+const _ram = @import("ram.zig");
+const Ram = _ram.Ram;
+
 const ADDR_IO_PORTS: u32 = 0x1f80_1000;
 
 const ChanCtl = struct {
@@ -59,6 +62,36 @@ const ChanCtl = struct {
     fn sync_mode(self: *Self) Sync {
         return @enumFromInt(self.v >> SYNC_MODE & 0b11);
     }
+
+    fn enable(self: *Self) bool {
+        return ((self.v >> START_BUSY) & 0b1) == 1;
+    }
+    fn set_enable_false(self: *Self) void {
+        const mask: u32 = @intCast(1 << START_BUSY);
+        self.v &= ~mask;
+    }
+
+    fn trigger(self: *Self) bool {
+        return ((self.v >> START_TRIG) & 0b1) == 1;
+    }
+    fn set_trigger_false(self: *Self) void {
+        const mask: u32 = @intCast(1 << START_TRIG);
+        self.v &= ~mask;
+    }
+
+    fn active(self: *Self) bool {
+        const start = if (self.sync_mode() == Sync.manual) self.trigger() else true;
+        return self.enable() and start;
+    }
+
+    // Set channel status to "completed" state
+    fn set_done(self: *Self) void {
+        self.set_enable_false();
+        self.set_trigger_false();
+
+        // TODO: Need to set the correct value for the other fields (in
+        // particular interrupts)
+    }
 };
 
 const BaseAddr = struct {
@@ -101,6 +134,19 @@ const BlkCtl = struct {
     fn set(self: *Self, v: u32) void {
         self.v = v;
     }
+
+    fn sync_manual_num_words(self: *Self) usize {
+        const n = self.v & 0xffff_ffff;
+        return if (n == 0) 0x10000 else n;
+    }
+
+    fn sync_request_blocksize(self: *Self) usize {
+        return self.v & 0xffff_ffff;
+    }
+
+    fn sync_request_amount_blocks(self: *Self) usize {
+        return self.v >> 16;
+    }
 };
 
 const Chan = struct {
@@ -115,6 +161,17 @@ const Chan = struct {
             .base_addr = BaseAddr.init(),
             .blk_ctl = BlkCtl.init(),
             .chan_ctl = ChanCtl.init(),
+        };
+    }
+
+    // DMA transfer size in words or null for linked list mode.
+    fn transfer_size(self: *Self) ?usize {
+        return switch (self.chan_ctl.sync_mode()) {
+            ChanCtl.Sync.manual => self.blk_ctl.sync_manual_num_words(),
+            ChanCtl.Sync.request => self.blk_ctl.sync_request_blocksize() * self.blk_ctl.sync_request_amount_blocks(),
+            // In linked list mode the size is not known ahead of time: we stop
+            // when we encounter the "end of list" marker (0xffffff).
+            else => null,
         };
     }
 };
@@ -223,13 +280,17 @@ pub const Dma = struct {
     control: Control, // 1f8010f0 DPCR - DMA Control register
     interrupt: Interrupt, // 1f8010f4 DICR - DMA Interrupt register
 
+    // Port devices
+    ram: Ram,
+
     const Self = @This();
 
-    pub fn init() Self {
+    pub fn init(ram: Ram) Self {
         return Self{
             .channels = .{Chan.init()} ** 7,
             .control = Control.init(),
             .interrupt = Interrupt.init(),
+            .ram = ram,
         };
     }
 
@@ -258,21 +319,117 @@ pub const Dma = struct {
         };
     }
     pub fn write_u32(self: *Self, addr: u16, v: u32) void {
+        std.debug.print("DBG: dma write *{x:0>4} = {x:0>8}\n", .{ addr, v });
         switch (addr) {
             REG_DMA_START...REG_DMA_END => {
                 const offset = addr - REG_DMA_START;
                 const port = offset >> 4;
-                const reg = offset & 0x000f >> 2;
+                const reg = offset & 0x000f;
+                var channel = &self.channels[port];
                 switch (reg) {
-                    0x0 => self.channels[port].base_addr.set(v),
-                    0x4 => self.channels[port].blk_ctl.set(v),
-                    0x8 => self.channels[port].chan_ctl.set(v),
+                    0x0 => channel.base_addr.set(v),
+                    0x4 => channel.blk_ctl.set(v),
+                    0x8 => channel.chan_ctl.set(v),
                     else => unreachable,
+                }
+                if (channel.chan_ctl.active()) {
+                    self.dma_transfer(@enumFromInt(port), channel);
                 }
             },
             REG_DPCR => self.control.set(v),
             REG_DICR => self.interrupt.set(v),
             else => unreachable,
         }
+    }
+
+    // Execute a DMA transfer for a port
+    fn dma_transfer(self: *Self, port: Port, channel: *Chan) void {
+        // DMA transfer has been started, for now let's process everything in
+        // one pass (i.e. no chopping or priority handling)
+        switch (channel.chan_ctl.sync_mode()) {
+            ChanCtl.Sync.linked_list => self.dma_linked_list(port, channel),
+            else => self.dma_block(port, channel),
+        }
+    }
+
+    fn dma_block(self: *Self, port: Port, channel: *Chan) void {
+        const increment: i32 = if (channel.chan_ctl.mem_addr_step_inc()) 4 else -4;
+        var addr = channel.base_addr.v;
+
+        // Transfer size in words
+        // NOTE: We never call this in Linked-List mode, which would return null in transfer_size()
+        var remsz = channel.transfer_size() orelse unreachable;
+
+        while (remsz > 0) {
+            // Mednafen mask the address this way
+            const cur_addr = addr & 0x1f_fffc;
+
+            if (channel.chan_ctl.trans_dir_to_ram()) {
+                const src_word = switch (port) {
+                    // Clear ordering table
+                    Port.otc => switch (remsz) {
+                        // Last entry (increment = -4) contains the end of table marker
+                        1 => 0xff_ffff,
+                        // Pointer to the previous entry
+                        else => (addr -% 4) & 0x1f_fffc,
+                    },
+                    else => std.debug.panic("TODO: DMA source-port {}", .{port}),
+                };
+                self.ram.write(u32, cur_addr, src_word);
+            } else {
+                const src_word = self.ram.read(u32, cur_addr);
+                switch (port) {
+                    Port.gpu => std.debug.print("DBG: GPU data {x:0>8}\n", .{src_word}),
+                    // Port.gpu => {
+                    //     _ = src_word;
+                    // },
+                    else => std.debug.panic("TODO: DMA destination-port {}", .{port}),
+                }
+            }
+
+            addr +%= @bitCast(increment);
+            remsz -= 1;
+        }
+
+        channel.chan_ctl.set_done();
+    }
+
+    fn dma_linked_list(self: *Self, port: Port, channel: *Chan) void {
+        var addr = channel.base_addr.v & 0x1f_fffc;
+
+        if (channel.chan_ctl.trans_dir_to_ram()) {
+            std.debug.panic("Invalid DMA direction for linked-list mode", .{});
+        }
+
+        // I don't know if the DMA even supports linked-list mode for anything besides the GPU
+        if (port != Port.gpu) {
+            std.debug.panic("Attempted linked-list DMA on port {}", .{port});
+        }
+
+        while (true) {
+            // In linked-list mode each entry starts with a "header" word.  The
+            // high byte contains the number of words in the "packet" (not
+            // counting the header word).
+            const header = self.ram.read(u32, addr);
+            var remsz = header >> 24;
+
+            while (remsz > 0) {
+                addr = (addr +% 4) & 0x1f_fffc;
+                const command = self.ram.read(u32, addr);
+                std.debug.print("DBG: GPU command {x:0>8}\n", .{command});
+                remsz -= 1;
+            }
+
+            // The end of list marker is usually 0xffffff but mednafen only
+            // checks for the MSB so maybe that's what the hardware does?
+            // Since this bit is not part of any valid address it makes some
+            // sense.  TODO: Test that at some point
+            if (header & 0x80_0000 != 0) {
+                break;
+            }
+            addr = header & 0x1f_fffc;
+        }
+
+        channel.chan_ctl.set_done();
     }
 };

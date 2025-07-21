@@ -128,3 +128,32 @@ pub const Inst = union(enum) {
     // tlbp: RTypeArgs,
     rfe: RTypeArgs,
 };
+
+pub fn buf_read(comptime T: type, buf: []const u8, addr: u32) T {
+    return switch (T) {
+        u8 => buf[addr],
+        u16 => @as(u16, buf[addr]) + @as(u16, buf[addr + 1]) * 0x100,
+        u32 => @as(u32, buf[addr]) + @as(u32, buf[addr + 1]) * 0x100 +
+            @as(u32, buf[addr + 2]) * 0x10000 + @as(u32, buf[addr + 3]) * 0x1000000,
+        else => @compileError("invalid T"),
+    };
+}
+
+pub fn buf_write(comptime T: type, buf: []u8, addr: u32, v: T) void {
+    switch (T) {
+        u8 => {
+            buf[addr] = @intCast(v);
+        },
+        u16 => {
+            buf[addr + 0] = @intCast((v & 0x00ff) >> 0);
+            buf[addr + 1] = @intCast((v & 0xff00) >> 8);
+        },
+        u32 => {
+            buf[addr + 0] = @intCast((v & 0x000000ff) >> 0);
+            buf[addr + 1] = @intCast((v & 0x0000ff00) >> 8);
+            buf[addr + 2] = @intCast((v & 0x00ff0000) >> 16);
+            buf[addr + 3] = @intCast((v & 0xff000000) >> 24);
+        },
+        else => @compileError("invalid T"),
+    }
+}
