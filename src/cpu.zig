@@ -22,11 +22,11 @@ const _ram = @import("ram.zig");
 const Ram = _ram.Ram;
 const SIZE_RAM = _ram.SIZE_RAM;
 
-const dma = @import("dma.zig");
-const Dma = dma.Dma;
+const _dma = @import("dma.zig");
+const Dma = _dma.Dma;
 
-const gpu = @import("gpu.zig");
-const Gpu = gpu.Gpu;
+const _gpu = @import("gpu.zig");
+const Gpu = _gpu.Gpu;
 
 pub const SIZE_BIOS: usize = 512 * 1024; // 512 KiB
 pub const SIZE_EXP_REG1: usize = 8 * 1024; // 8 KiB
@@ -247,7 +247,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         regs: [32]u32, // Registers
         cop0: Cop0,
         dma: Dma,
-        gpu: Gpu,
+        gpu: *Gpu,
         pc: u32 = 0, // Current Program Counter
         next_pc: u32, // Next Program Counter
         next_next_pc: u32, // Next next Program Counter
@@ -272,6 +272,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 return error.BiosInvalidSize;
             }
             const ram = try Ram.init(allocator);
+            const gpu = try allocator.create(Gpu);
+            gpu.* = Gpu.init();
             const bios_copy = try allocator.alloc(u8, SIZE_BIOS);
             std.mem.copyForwards(u8, bios_copy, bios);
             const pc = VADDR_RESET;
@@ -281,8 +283,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .dbg = Dbg.init(allocator),
                 .regs = .{0} ** 32,
                 .cop0 = Cop0.init(),
-                .dma = Dma.init(ram),
-                .gpu = Gpu.init(),
+                .dma = Dma.init(ram, gpu),
+                .gpu = gpu,
                 .next_pc = pc,
                 .next_next_pc = pc +% 4,
                 .lo = 0,
@@ -296,6 +298,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
 
         pub fn deinit(self: *Self) void {
             self.ram.deinit();
+            self.allocator.destroy(self.gpu);
             self.allocator.free(self.bios);
             self.dbg.deinit();
         }

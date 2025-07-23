@@ -3,6 +3,9 @@ const std = @import("std");
 const _ram = @import("ram.zig");
 const Ram = _ram.Ram;
 
+const _gpu = @import("gpu.zig");
+const Gpu = _gpu.Gpu;
+
 const ADDR_IO_PORTS: u32 = 0x1f80_1000;
 
 const ChanCtl = struct {
@@ -282,15 +285,17 @@ pub const Dma = struct {
 
     // Port devices
     ram: Ram,
+    gpu: *Gpu,
 
     const Self = @This();
 
-    pub fn init(ram: Ram) Self {
+    pub fn init(ram: Ram, gpu: *Gpu) Self {
         return Self{
             .channels = .{Chan.init()} ** 7,
             .control = Control.init(),
             .interrupt = Interrupt.init(),
             .ram = ram,
+            .gpu = gpu,
         };
     }
 
@@ -379,10 +384,7 @@ pub const Dma = struct {
             } else {
                 const src_word = self.ram.read(u32, cur_addr);
                 switch (port) {
-                    Port.gpu => std.debug.print("DBG: GPU data {x:0>8}\n", .{src_word}),
-                    // Port.gpu => {
-                    //     _ = src_word;
-                    // },
+                    Port.gpu => self.gpu.gp0(src_word),
                     else => std.debug.panic("TODO: DMA destination-port {}", .{port}),
                 }
             }
@@ -416,7 +418,7 @@ pub const Dma = struct {
             while (remsz > 0) {
                 addr = (addr +% 4) & 0x1f_fffc;
                 const command = self.ram.read(u32, addr);
-                std.debug.print("DBG: GPU command {x:0>8}\n", .{command});
+                self.gpu.gp0(command);
                 remsz -= 1;
             }
 
