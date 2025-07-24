@@ -87,7 +87,7 @@ const Stat = packed struct {
     // 11    Set Mask-bit when drawing pixels (0=No, 1=Yes/Mask)       ;GP0(E6h).0
     // Force "mask" bit of the pixel to 1 when writing to VRAM
     // (otherwise don't modify it)
-    set_mask_bits: bool = false,
+    force_set_mask_bit: bool = false,
     // 12    Draw Pixels           (0=Always, 1=Not to Masked areas)   ;GP0(E6h).1
     // Don't draw to pixels which have the "mask" bit set
     preserve_masked_pixels: bool = false,
@@ -211,8 +211,66 @@ const ArgsDrawMode = packed struct {
     }
 };
 
-const Gp0CommandArg = packed union {
+const ArgsDrawingArea = packed struct {
+    // 0-9    X-coordinate (0..1023)
+    x_coord: u10,
+    // 10-18  Y-coordinate (0..511)   ;\on Old 160pin GPU (max 1MB VRAM)
+    // 10-19  Y-coordinate (0..1023)  ;\on New 208pin GPU (max 2MB VRAM)
+    y_coord: u10,
+    // 20-23  Not used (zero)         ;/(retail consoles have only 1MB though)
+    unused_1: u4,
+    comptime {
+        std.debug.assert(@bitSizeOf(@This()) == 24);
+    }
+};
+
+const ArgsDrawingOffset = packed struct {
+    // 0-10   X-offset (-1024..+1023) (usually within X1,X2 of Drawing Area)
+    x_offset: i11,
+    // 11-21  Y-offset (-1024..+1023) (usually within Y1,Y2 of Drawing Area)
+    y_offset: i11,
+    // 22-23  Not used (zero)
+    unused: u2,
+    comptime {
+        std.debug.assert(@bitSizeOf(@This()) == 24);
+    }
+};
+
+const ArgsTextureWindow = packed struct {
+    // 0-4    Texture window Mask X   (in 8 pixel steps)
+    texture_window_x_mask: u5,
+    // 5-9    Texture window Mask Y   (in 8 pixel steps)
+    texture_window_y_mask: u5,
+    // 10-14  Texture window Offset X (in 8 pixel steps)
+    texture_window_x_offset: u5,
+    // 15-19  Texture window Offset Y (in 8 pixel steps)
+    texture_window_y_offset: u5,
+    // 20-23  Not used (zero)
+    unused: u4,
+    comptime {
+        std.debug.assert(@bitSizeOf(@This()) == 24);
+    }
+};
+
+const ArgsBitMaskSetting = packed struct {
+    // 0     Set mask while drawing (0=TextureBit15, 1=ForceBit15=1)   ;GPUSTAT.11
+    force_set_mask_bit: bool,
+    // 1     Check mask before draw (0=Draw Always, 1=Draw if Bit15=0) ;GPUSTAT.12
+    preserve_masked_pixels: bool,
+    // 2-23  Not used (zero)
+    unused: u22,
+    comptime {
+        std.debug.assert(@bitSizeOf(@This()) == 24);
+    }
+};
+
+const Gp0Arg = packed union {
     draw_mode: ArgsDrawMode,
+    drawing_area: ArgsDrawingArea,
+    drawing_offset: ArgsDrawingOffset,
+    texture_window: ArgsTextureWindow,
+    bit_mask_setting: ArgsBitMaskSetting,
+    raw: u24,
 };
 
 const Gp0Op = enum(u8) {
@@ -220,22 +278,74 @@ const Gp0Op = enum(u8) {
     nop = 0x00,
     // GP0(E1h) - Draw Mode setting (aka "Texpage")
     draw_mode = 0xe1,
+    // GP0(E2h) - Texture Window setting
+    texture_window = 0xe2,
+    // GP0(E3h) - Set Drawing Area top left (X1,Y1)
+    drawing_area_top_left = 0xe3,
+    // GP0(E4h) - Set Drawing Area bottom right (X2,Y2)
+    drawing_area_bottom_right = 0xe4,
+    // GP0(E5h) - Set Drawing Offset (X,Y)
+    drawing_offset = 0xe5,
+    // GP0(E6h) - Mask Bit Setting
+    bit_mask_setting = 0xe6,
     _,
 };
 
 const Gp0Command = packed struct {
-    args: Gp0CommandArg,
+    args: Gp0Arg,
     op: Gp0Op,
+};
+
+const ArgsDisplayMode = packed struct {
+    // 0-1   Horizontal Resolution 1     (0=256, 1=320, 2=512, 3=640) ;GPUSTAT.17-18
+    horizontal_res_1: u2,
+    // 2     Vertical Resolution         (0=240, 1=480, when Bit5=1)  ;GPUSTAT.19
+    vertical_res: Stat.VerticalRes,
+    // 3     Video Mode                  (0=NTSC/60Hz, 1=PAL/50Hz)    ;GPUSTAT.20
+    video_mode: Stat.VideoMode,
+    // 4     Display Area Color Depth    (0=15bit, 1=24bit)           ;GPUSTAT.21
+    display_depth: Stat.DisplayDepth,
+    // 5     Vertical Interlace          (0=Off, 1=On)                ;GPUSTAT.22
+    vertical_interlace: bool,
+    // 6     Horizontal Resolution 2     (0=256/320/512/640, 1=368)   ;GPUSTAT.16
+    horizontal_res_2: u1,
+    // 7     "Reverseflag"               (0=Normal, 1=Distorted)      ;GPUSTAT.14
+    reverse_flag: u1,
+    // 8-23  Not used (zero)
+    unused: u16,
+    comptime {
+        std.debug.assert(@bitSizeOf(@This()) == 24);
+    }
+};
+
+const ArgsDirectionArgs = packed struct {
+    // 0-1  DMA Direction (0=Off, 1=FIFO, 2=CPUtoGP0, 3=GPUREADtoCPU) ;GPUSTAT.29-30
+    dma_direction: Stat.DmaDirection,
+    // 2-23 Not used (zero)
+    unused: u22,
+    comptime {
+        std.debug.assert(@bitSizeOf(@This()) == 24);
+    }
+};
+
+const Gp1Args = packed union {
+    display_mode: ArgsDisplayMode,
+    dma_direction: ArgsDirectionArgs,
+    raw: u24,
 };
 
 const Gp1Op = enum(u8) {
     // GP1(00h) - Reset GPU
     reset = 0x00,
+    // GP1(04h) - DMA Direction / Data Request
+    dma_direction = 0x04,
+    // GP1(08h) - Display mode
+    display_mode = 0x08,
     _,
 };
 
 const Gp1Command = packed struct {
-    args: u24,
+    args: Gp1Args,
     op: Gp1Op,
 };
 
@@ -305,7 +415,7 @@ pub const Gpu = struct {
         const reg: RegRead = @enumFromInt(addr);
         switch (reg) {
             RegRead.read => {
-                std.debug.print("TODO: gpu.read_u32 READ\n", .{});
+                // TODO
                 return 0;
             },
             RegRead.stat => {
@@ -321,7 +431,7 @@ pub const Gpu = struct {
                 self.gp0(v);
             },
             RegWrite.gp1 => {
-                std.debug.print("TODO: gpu.write_u32 GP1 value {x:0>8}\n", .{v});
+                self.gp1(v);
             },
             _ => unreachable,
         }
@@ -332,7 +442,15 @@ pub const Gpu = struct {
         switch (cmd.op) {
             Gp0Op.nop => {},
             Gp0Op.draw_mode => self.draw_mode(cmd.args.draw_mode),
-            _ => std.debug.panic("TODO: gpu gp0 op {x:0>2}", .{cmd.op}),
+            Gp0Op.texture_window => self.texture_window(cmd.args.texture_window),
+            Gp0Op.drawing_area_top_left => self.drawing_area_top_left(cmd.args.drawing_area),
+            Gp0Op.drawing_area_bottom_right => self.drawing_area_bottom_right(cmd.args.drawing_area),
+            Gp0Op.drawing_offset => self.drawing_offset(cmd.args.drawing_offset),
+            Gp0Op.bit_mask_setting => self.bit_mask_setting(cmd.args.bit_mask_setting),
+            _ => {
+                std.debug.print("GPU: \n{}\n", .{self});
+                std.debug.panic("TODO: gpu gp0 op {x:0>2} args {x:0>6}", .{ cmd.op, cmd.args.raw });
+            },
         }
     }
 
@@ -352,11 +470,45 @@ pub const Gpu = struct {
         self.texture_rectangle_y_flip = args.texture_rectangle_y_flip;
     }
 
+    // GP0(E2): Texture Window setting
+    fn texture_window(self: *Self, args: ArgsTextureWindow) void {
+        self.texture_window_x_mask = args.texture_window_x_mask;
+        self.texture_window_y_mask = args.texture_window_y_mask;
+        self.texture_window_x_offset = args.texture_window_x_offset;
+        self.texture_window_y_offset = args.texture_window_y_offset;
+    }
+
+    // GP0(E3): Set Drawing Area top left (X1,Y1)
+    fn drawing_area_top_left(self: *Self, args: ArgsDrawingArea) void {
+        self.drawing_area_left = args.x_coord;
+        self.drawing_area_top = args.y_coord;
+    }
+
+    // GP0(E4): Set Drawing Area bottom right (X2,Y2)
+    fn drawing_area_bottom_right(self: *Self, args: ArgsDrawingArea) void {
+        self.drawing_area_right = args.x_coord;
+        self.drawing_area_bottom = args.y_coord;
+    }
+
+    // GP0(E5): Set Drawing Offset (X,Y)
+    fn drawing_offset(self: *Self, args: ArgsDrawingOffset) void {
+        self.drawing_x_offset = args.x_offset;
+        self.drawing_y_offset = args.y_offset;
+    }
+
+    // GP0(E6): Mask Bit Setting
+    fn bit_mask_setting(self: *Self, args: ArgsBitMaskSetting) void {
+        self.stat.force_set_mask_bit = args.force_set_mask_bit;
+        self.stat.preserve_masked_pixels = args.preserve_masked_pixels;
+    }
+
     fn gp1(self: *Self, v: u32) void {
         const cmd: Gp1Command = @bitCast(v);
         switch (cmd.op) {
             Gp1Op.reset => self.reset(),
-            _ => std.debug.panic("TODO: gpu gp1 op {x:0>2}", .{cmd.op}),
+            Gp1Op.display_mode => self.display_mode(cmd.args.display_mode),
+            Gp1Op.dma_direction => self.dma_direction(cmd.args.dma_direction),
+            _ => std.debug.panic("TODO: gpu gp1 op {x:0>2} args {x:0>6}", .{ cmd.op, cmd.args.raw }),
         }
     }
 
@@ -383,7 +535,7 @@ pub const Gpu = struct {
         self.drawing_area_bottom = 0;
         self.drawing_x_offset = 0;
         self.drawing_y_offset = 0;
-        self.stat.set_mask_bits = false;
+        self.stat.force_set_mask_bit = false;
         self.stat.preserve_masked_pixels = false;
 
         self.stat.dma_direction = Stat.DmaDirection.off;
@@ -405,5 +557,24 @@ pub const Gpu = struct {
 
         // TODO should also clear the command FIFO when we implement it
         // TODO should also invalidate GPU cache if we ever implement it
+    }
+
+    // GP1(08): Display mode
+    fn display_mode(self: *Self, args: ArgsDisplayMode) void {
+        self.stat.horizontal_res_1 = args.horizontal_res_1;
+        self.stat.horizontal_res_2 = args.horizontal_res_2;
+        self.stat.video_mode = args.video_mode;
+        self.stat.display_depth = args.display_depth;
+        self.stat.vertical_interlace = args.vertical_interlace;
+        self.stat.horizontal_res_2 = args.horizontal_res_2;
+        if (args.reverse_flag == 1) {
+            std.debug.panic("unsupported: reverse_flag=1", .{});
+        }
+        self.stat.reverse_flag = args.reverse_flag;
+    }
+
+    // GP1(04): DMA Direction / Data Request
+    fn dma_direction(self: *Self, args: ArgsDirectionArgs) void {
+        self.stat.dma_direction = args.dma_direction;
     }
 };

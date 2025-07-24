@@ -324,7 +324,6 @@ pub const Dma = struct {
         };
     }
     pub fn write_u32(self: *Self, addr: u16, v: u32) void {
-        std.debug.print("DBG: dma write *{x:0>4} = {x:0>8}\n", .{ addr, v });
         switch (addr) {
             REG_DMA_START...REG_DMA_END => {
                 const offset = addr - REG_DMA_START;
