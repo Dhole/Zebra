@@ -184,169 +184,270 @@ const Stat = packed struct {
     }
 };
 
-const ArgsDrawMode = packed struct {
-    // 0-3   Texture page X Base   (N*64) (ie. in 64-halfword steps)    ;GPUSTAT.0-3
-    texture_page_x_base: u4,
-    // 4     Texture page Y Base   (N*256) (ie. 0 or 256)               ;GPUSTAT.4
-    texture_page_y_base: u1,
-    // 5-6   Semi Transparency     (0=B/2+F/2, 1=B+F, 2=B-F, 3=B+F/4)   ;GPUSTAT.5-6
-    semi_transparency: u2,
-    // 7-8   Texture page colors   (0=4bit, 1=8bit, 2=15bit, 3=Reserved);GPUSTAT.7-8
-    texture_depth: Stat.TextureDepth,
-    // 9     Dither 24bit to 15bit (0=Off/strip LSBs, 1=Dither Enabled) ;GPUSTAT.9
-    dither: bool,
-    // 10    Drawing to display area (0=Prohibited, 1=Allowed)          ;GPUSTAT.10
-    draw_to_display: bool,
-    // 11    Texture Disable (0=Normal, 1=Disable if GP1(09h).Bit0=1)   ;GPUSTAT.15
-    //         (Above might be chipselect for (absent) second VRAM chip?)
-    texture_disable: bool,
-    // 12    Textured Rectangle X-Flip   (BIOS does set this bit on power-up...?)
-    texture_rectangle_x_flip: bool,
-    // 13    Textured Rectangle Y-Flip   (BIOS does set it equal to GPUSTAT.13...?)
-    texture_rectangle_y_flip: bool,
-    // 14-23 Not used (should be 0)
-    unused: u10,
+const Gp0Packet = packed union {
+    const Vertex = packed struct {
+        x: u16,
+        y: u16,
+        comptime {
+            std.debug.assert(@bitSizeOf(@This()) == 32);
+        }
+    };
+
+    vertex: Vertex,
     comptime {
-        std.debug.assert(@bitSizeOf(@This()) == 24);
+        std.debug.assert(@bitSizeOf(@This()) == 32);
     }
 };
 
-const ArgsDrawingArea = packed struct {
-    // 0-9    X-coordinate (0..1023)
-    x_coord: u10,
-    // 10-18  Y-coordinate (0..511)   ;\on Old 160pin GPU (max 1MB VRAM)
-    // 10-19  Y-coordinate (0..1023)  ;\on New 208pin GPU (max 2MB VRAM)
-    y_coord: u10,
-    // 20-23  Not used (zero)         ;/(retail consoles have only 1MB though)
-    unused_1: u4,
-    comptime {
-        std.debug.assert(@bitSizeOf(@This()) == 24);
+const Gp0Cmd = packed struct {
+    const Op = enum(u8) {
+        // GP0(00h) - NOP (?)
+        nop = 0x00,
+        // GP0(28h) - Monochrome four-point polygon, opaque
+        quad_mono_opaque = 0x28,
+        // GP0(E1h) - Draw Mode setting (aka "Texpage")
+        draw_mode = 0xe1,
+        // GP0(E2h) - Texture Window setting
+        texture_window = 0xe2,
+        // GP0(E3h) - Set Drawing Area top left (X1,Y1)
+        drawing_area_top_left = 0xe3,
+        // GP0(E4h) - Set Drawing Area bottom right (X2,Y2)
+        drawing_area_bottom_right = 0xe4,
+        // GP0(E5h) - Set Drawing Offset (X,Y)
+        drawing_offset = 0xe5,
+        // GP0(E6h) - Mask Bit Setting
+        bit_mask_setting = 0xe6,
+        _,
+    };
+
+    const Args = packed union {
+        const MonoPolygon = packed struct {
+            red: u8,
+            green: u8,
+            blue: u8,
+            comptime {
+                std.debug.assert(@bitSizeOf(@This()) == 24);
+            }
+        };
+        const DrawMode = packed struct {
+            // 0-3   Texture page X Base   (N*64) (ie. in 64-halfword steps)    ;GPUSTAT.0-3
+            texture_page_x_base: u4,
+            // 4     Texture page Y Base   (N*256) (ie. 0 or 256)               ;GPUSTAT.4
+            texture_page_y_base: u1,
+            // 5-6   Semi Transparency     (0=B/2+F/2, 1=B+F, 2=B-F, 3=B+F/4)   ;GPUSTAT.5-6
+            semi_transparency: u2,
+            // 7-8   Texture page colors   (0=4bit, 1=8bit, 2=15bit, 3=Reserved);GPUSTAT.7-8
+            texture_depth: Stat.TextureDepth,
+            // 9     Dither 24bit to 15bit (0=Off/strip LSBs, 1=Dither Enabled) ;GPUSTAT.9
+            dither: bool,
+            // 10    Drawing to display area (0=Prohibited, 1=Allowed)          ;GPUSTAT.10
+            draw_to_display: bool,
+            // 11    Texture Disable (0=Normal, 1=Disable if GP1(09h).Bit0=1)   ;GPUSTAT.15
+            //         (Above might be chipselect for (absent) second VRAM chip?)
+            texture_disable: bool,
+            // 12    Textured Rectangle X-Flip   (BIOS does set this bit on power-up...?)
+            texture_rectangle_x_flip: bool,
+            // 13    Textured Rectangle Y-Flip   (BIOS does set it equal to GPUSTAT.13...?)
+            texture_rectangle_y_flip: bool,
+            // 14-23 Not used (should be 0)
+            unused: u10,
+            comptime {
+                std.debug.assert(@bitSizeOf(@This()) == 24);
+            }
+        };
+
+        const DrawingArea = packed struct {
+            // 0-9    X-coordinate (0..1023)
+            x_coord: u10,
+            // 10-18  Y-coordinate (0..511)   ;\on Old 160pin GPU (max 1MB VRAM)
+            // 10-19  Y-coordinate (0..1023)  ;\on New 208pin GPU (max 2MB VRAM)
+            y_coord: u10,
+            // 20-23  Not used (zero)         ;/(retail consoles have only 1MB though)
+            unused_1: u4,
+            comptime {
+                std.debug.assert(@bitSizeOf(@This()) == 24);
+            }
+        };
+
+        const DrawingOffset = packed struct {
+            // 0-10   X-offset (-1024..+1023) (usually within X1,X2 of Drawing Area)
+            x_offset: i11,
+            // 11-21  Y-offset (-1024..+1023) (usually within Y1,Y2 of Drawing Area)
+            y_offset: i11,
+            // 22-23  Not used (zero)
+            unused: u2,
+            comptime {
+                std.debug.assert(@bitSizeOf(@This()) == 24);
+            }
+        };
+
+        const TextureWindow = packed struct {
+            // 0-4    Texture window Mask X   (in 8 pixel steps)
+            texture_window_x_mask: u5,
+            // 5-9    Texture window Mask Y   (in 8 pixel steps)
+            texture_window_y_mask: u5,
+            // 10-14  Texture window Offset X (in 8 pixel steps)
+            texture_window_x_offset: u5,
+            // 15-19  Texture window Offset Y (in 8 pixel steps)
+            texture_window_y_offset: u5,
+            // 20-23  Not used (zero)
+            unused: u4,
+            comptime {
+                std.debug.assert(@bitSizeOf(@This()) == 24);
+            }
+        };
+
+        const BitMaskSetting = packed struct {
+            // 0     Set mask while drawing (0=TextureBit15, 1=ForceBit15=1)   ;GPUSTAT.11
+            force_set_mask_bit: bool,
+            // 1     Check mask before draw (0=Draw Always, 1=Draw if Bit15=0) ;GPUSTAT.12
+            preserve_masked_pixels: bool,
+            // 2-23  Not used (zero)
+            unused: u22,
+            comptime {
+                std.debug.assert(@bitSizeOf(@This()) == 24);
+            }
+        };
+
+        mono_polygon: MonoPolygon,
+        draw_mode: DrawMode,
+        drawing_area: DrawingArea,
+        drawing_offset: DrawingOffset,
+        texture_window: TextureWindow,
+        bit_mask_setting: BitMaskSetting,
+        raw: u24,
+        comptime {
+            std.debug.assert(@bitSizeOf(@This()) == 24);
+        }
+    };
+
+    args: Args,
+    op: Op,
+};
+
+const Gp1Cmd = packed struct {
+    const Op = enum(u8) {
+        // GP1(00h) - Reset GPU
+        reset = 0x00,
+        // GP1(04h) - DMA Direction / Data Request
+        dma_direction = 0x04,
+        // GP1(05h) - Start of Display area (in VRAM)
+        display_vram_start = 0x05,
+        // GP1(06h) - Horizontal Display range (on Screen)
+        display_horizontal_range = 0x06,
+        // GP1(07h) - Vertical Display range (on Screen)
+        display_vertical_range = 0x07,
+        // GP1(08h) - Display mode
+        display_mode = 0x08,
+        _,
+    };
+
+    const Args = packed union {
+        const DisplayMode = packed struct {
+            // 0-1   Horizontal Resolution 1     (0=256, 1=320, 2=512, 3=640) ;GPUSTAT.17-18
+            horizontal_res_1: u2,
+            // 2     Vertical Resolution         (0=240, 1=480, when Bit5=1)  ;GPUSTAT.19
+            vertical_res: Stat.VerticalRes,
+            // 3     Video Mode                  (0=NTSC/60Hz, 1=PAL/50Hz)    ;GPUSTAT.20
+            video_mode: Stat.VideoMode,
+            // 4     Display Area Color Depth    (0=15bit, 1=24bit)           ;GPUSTAT.21
+            display_depth: Stat.DisplayDepth,
+            // 5     Vertical Interlace          (0=Off, 1=On)                ;GPUSTAT.22
+            vertical_interlace: bool,
+            // 6     Horizontal Resolution 2     (0=256/320/512/640, 1=368)   ;GPUSTAT.16
+            horizontal_res_2: u1,
+            // 7     "Reverseflag"               (0=Normal, 1=Distorted)      ;GPUSTAT.14
+            reverse_flag: u1,
+            // 8-23  Not used (zero)
+            unused: u16,
+            comptime {
+                std.debug.assert(@bitSizeOf(@This()) == 24);
+            }
+        };
+
+        const DirectionArgs = packed struct {
+            // 0-1  DMA Direction (0=Off, 1=FIFO, 2=CPUtoGP0, 3=GPUREADtoCPU) ;GPUSTAT.29-30
+            dma_direction: Stat.DmaDirection,
+            // 2-23 Not used (zero)
+            unused: u22,
+            comptime {
+                std.debug.assert(@bitSizeOf(@This()) == 24);
+            }
+        };
+
+        const DisplayVramStart = packed struct {
+            // 0-9   X (0-1023)    (halfword address in VRAM)  (relative to begin of VRAM)
+            x: u10,
+            // 10-18 Y (0-511)     (scanline number in VRAM)   (relative to begin of VRAM)
+            y: u9,
+            // 19-23 Not used (zero)
+            unused: u5,
+            comptime {
+                std.debug.assert(@bitSizeOf(@This()) == 24);
+            }
+        };
+
+        const DisplayHorizontalRange = packed struct {
+            // 0-11   X1 (260h+0)       ;12bit       ;\counted in 53.222400MHz units,
+            x1: u12,
+            // 12-23  X2 (260h+320*8)   ;12bit       ;/relative to HSYNC
+            x2: u12,
+            comptime {
+                std.debug.assert(@bitSizeOf(@This()) == 24);
+            }
+        };
+
+        const DisplayVerticalRange = packed struct {
+            // 0-9   Y1 (NTSC=88h-(224/2), (PAL=A3h-(264/2))  ;\scanline numbers on screen,
+            y1: u10,
+            // 10-19 Y2 (NTSC=88h+(224/2), (PAL=A3h+(264/2))  ;/relative to VSYNC
+            y2: u10,
+            // 20-23 Not used (zero)
+            unused: u4,
+            comptime {
+                std.debug.assert(@bitSizeOf(@This()) == 24);
+            }
+        };
+
+        display_mode: DisplayMode,
+        dma_direction: DirectionArgs,
+        display_vram_start: DisplayVramStart,
+        display_horizontal_range: DisplayHorizontalRange,
+        display_vertical_range: DisplayVerticalRange,
+        raw: u24,
+        comptime {
+            std.debug.assert(@bitSizeOf(@This()) == 24);
+        }
+    };
+
+    args: Args,
+    op: Op,
+};
+
+const CmdBuffer = struct {
+    // Command buffer: the longuest possible command is GP0(0x3E)
+    // which takes 12 parameters
+    const SIZE = 12;
+    buffer: [SIZE]u32,
+    len: u8,
+
+    const Self = @This();
+
+    fn init() Self {
+        return Self{
+            .buffer = .{0} ** 12,
+            .len = 0,
+        };
     }
-};
 
-const ArgsDrawingOffset = packed struct {
-    // 0-10   X-offset (-1024..+1023) (usually within X1,X2 of Drawing Area)
-    x_offset: i11,
-    // 11-21  Y-offset (-1024..+1023) (usually within Y1,Y2 of Drawing Area)
-    y_offset: i11,
-    // 22-23  Not used (zero)
-    unused: u2,
-    comptime {
-        std.debug.assert(@bitSizeOf(@This()) == 24);
+    fn clear(self: *Self) void {
+        self.len = 0;
     }
-};
 
-const ArgsTextureWindow = packed struct {
-    // 0-4    Texture window Mask X   (in 8 pixel steps)
-    texture_window_x_mask: u5,
-    // 5-9    Texture window Mask Y   (in 8 pixel steps)
-    texture_window_y_mask: u5,
-    // 10-14  Texture window Offset X (in 8 pixel steps)
-    texture_window_x_offset: u5,
-    // 15-19  Texture window Offset Y (in 8 pixel steps)
-    texture_window_y_offset: u5,
-    // 20-23  Not used (zero)
-    unused: u4,
-    comptime {
-        std.debug.assert(@bitSizeOf(@This()) == 24);
+    fn push_word(self: *Self, word: u32) void {
+        self.buffer[self.len] = word;
+        self.len += 1;
     }
-};
-
-const ArgsBitMaskSetting = packed struct {
-    // 0     Set mask while drawing (0=TextureBit15, 1=ForceBit15=1)   ;GPUSTAT.11
-    force_set_mask_bit: bool,
-    // 1     Check mask before draw (0=Draw Always, 1=Draw if Bit15=0) ;GPUSTAT.12
-    preserve_masked_pixels: bool,
-    // 2-23  Not used (zero)
-    unused: u22,
-    comptime {
-        std.debug.assert(@bitSizeOf(@This()) == 24);
-    }
-};
-
-const Gp0Arg = packed union {
-    draw_mode: ArgsDrawMode,
-    drawing_area: ArgsDrawingArea,
-    drawing_offset: ArgsDrawingOffset,
-    texture_window: ArgsTextureWindow,
-    bit_mask_setting: ArgsBitMaskSetting,
-    raw: u24,
-};
-
-const Gp0Op = enum(u8) {
-    // GP0(00h) - NOP (?)
-    nop = 0x00,
-    // GP0(E1h) - Draw Mode setting (aka "Texpage")
-    draw_mode = 0xe1,
-    // GP0(E2h) - Texture Window setting
-    texture_window = 0xe2,
-    // GP0(E3h) - Set Drawing Area top left (X1,Y1)
-    drawing_area_top_left = 0xe3,
-    // GP0(E4h) - Set Drawing Area bottom right (X2,Y2)
-    drawing_area_bottom_right = 0xe4,
-    // GP0(E5h) - Set Drawing Offset (X,Y)
-    drawing_offset = 0xe5,
-    // GP0(E6h) - Mask Bit Setting
-    bit_mask_setting = 0xe6,
-    _,
-};
-
-const Gp0Command = packed struct {
-    args: Gp0Arg,
-    op: Gp0Op,
-};
-
-const ArgsDisplayMode = packed struct {
-    // 0-1   Horizontal Resolution 1     (0=256, 1=320, 2=512, 3=640) ;GPUSTAT.17-18
-    horizontal_res_1: u2,
-    // 2     Vertical Resolution         (0=240, 1=480, when Bit5=1)  ;GPUSTAT.19
-    vertical_res: Stat.VerticalRes,
-    // 3     Video Mode                  (0=NTSC/60Hz, 1=PAL/50Hz)    ;GPUSTAT.20
-    video_mode: Stat.VideoMode,
-    // 4     Display Area Color Depth    (0=15bit, 1=24bit)           ;GPUSTAT.21
-    display_depth: Stat.DisplayDepth,
-    // 5     Vertical Interlace          (0=Off, 1=On)                ;GPUSTAT.22
-    vertical_interlace: bool,
-    // 6     Horizontal Resolution 2     (0=256/320/512/640, 1=368)   ;GPUSTAT.16
-    horizontal_res_2: u1,
-    // 7     "Reverseflag"               (0=Normal, 1=Distorted)      ;GPUSTAT.14
-    reverse_flag: u1,
-    // 8-23  Not used (zero)
-    unused: u16,
-    comptime {
-        std.debug.assert(@bitSizeOf(@This()) == 24);
-    }
-};
-
-const ArgsDirectionArgs = packed struct {
-    // 0-1  DMA Direction (0=Off, 1=FIFO, 2=CPUtoGP0, 3=GPUREADtoCPU) ;GPUSTAT.29-30
-    dma_direction: Stat.DmaDirection,
-    // 2-23 Not used (zero)
-    unused: u22,
-    comptime {
-        std.debug.assert(@bitSizeOf(@This()) == 24);
-    }
-};
-
-const Gp1Args = packed union {
-    display_mode: ArgsDisplayMode,
-    dma_direction: ArgsDirectionArgs,
-    raw: u24,
-};
-
-const Gp1Op = enum(u8) {
-    // GP1(00h) - Reset GPU
-    reset = 0x00,
-    // GP1(04h) - DMA Direction / Data Request
-    dma_direction = 0x04,
-    // GP1(08h) - Display mode
-    display_mode = 0x08,
-    _,
-};
-
-const Gp1Command = packed struct {
-    args: Gp1Args,
-    op: Gp1Op,
 };
 
 pub const Gpu = struct {
@@ -403,12 +504,24 @@ pub const Gpu = struct {
     // Display output last line relative to VSYNC
     display_line_end: u16 = 0x100,
 
+    gp0_cmd_buffer: CmdBuffer,
+    gp0_cmd_rem: u8,
+    gp0_cmd_fn: *const fn (*Self, buffer: *[CmdBuffer.SIZE]u32) void,
+
     const Self = @This();
 
     pub fn init() Self {
         return Self{
             .stat = Stat.init(),
+            .gp0_cmd_buffer = CmdBuffer.init(),
+            .gp0_cmd_rem = 0,
+            .gp0_cmd_fn = Self.gp0_dummy,
         };
+    }
+
+    fn gp0_dummy(self: *Self, buffer: *[12]u32) void {
+        _ = self;
+        _ = buffer;
     }
 
     pub fn read_u32(self: *Self, addr: u16) u32 {
@@ -438,24 +551,50 @@ pub const Gpu = struct {
     }
 
     pub fn gp0(self: *Self, v: u32) void {
-        const cmd: Gp0Command = @bitCast(v);
-        switch (cmd.op) {
-            Gp0Op.nop => {},
-            Gp0Op.draw_mode => self.draw_mode(cmd.args.draw_mode),
-            Gp0Op.texture_window => self.texture_window(cmd.args.texture_window),
-            Gp0Op.drawing_area_top_left => self.drawing_area_top_left(cmd.args.drawing_area),
-            Gp0Op.drawing_area_bottom_right => self.drawing_area_bottom_right(cmd.args.drawing_area),
-            Gp0Op.drawing_offset => self.drawing_offset(cmd.args.drawing_offset),
-            Gp0Op.bit_mask_setting => self.bit_mask_setting(cmd.args.bit_mask_setting),
-            _ => {
-                std.debug.print("GPU: \n{}\n", .{self});
-                std.debug.panic("TODO: gpu gp0 op {x:0>2} args {x:0>6}", .{ cmd.op, cmd.args.raw });
-            },
+        if (self.gp0_cmd_rem == 0) {
+            const cmd: Gp0Cmd = @bitCast(v);
+            switch (cmd.op) {
+                Gp0Cmd.Op.nop => {},
+                Gp0Cmd.Op.quad_mono_opaque => {
+                    self.gp0_cmd_buffer.push_word(v);
+                    self.gp0_cmd_rem = 4;
+                    self.gp0_cmd_fn = Self.quad_mono_opaque;
+                },
+                Gp0Cmd.Op.draw_mode => self.draw_mode(cmd.args.draw_mode),
+                Gp0Cmd.Op.texture_window => self.texture_window(cmd.args.texture_window),
+                Gp0Cmd.Op.drawing_area_top_left => self.drawing_area_top_left(cmd.args.drawing_area),
+                Gp0Cmd.Op.drawing_area_bottom_right => self.drawing_area_bottom_right(cmd.args.drawing_area),
+                Gp0Cmd.Op.drawing_offset => self.drawing_offset(cmd.args.drawing_offset),
+                Gp0Cmd.Op.bit_mask_setting => self.bit_mask_setting(cmd.args.bit_mask_setting),
+                _ => {
+                    std.debug.print("GPU: \n{}\n", .{self});
+                    std.debug.panic("TODO: gpu gp0 op {x:0>2} args {x:0>6}", .{ cmd.op, cmd.args.raw });
+                },
+            }
+        } else {
+            self.gp0_cmd_buffer.push_word(v);
+            self.gp0_cmd_rem -= 1;
+            if (self.gp0_cmd_rem == 0) {
+                self.gp0_cmd_fn(self, &self.gp0_cmd_buffer.buffer);
+                self.gp0_cmd_buffer.clear();
+            }
         }
     }
 
+    // GP0(28): Monochrome four-point polygon, opaque
+    fn quad_mono_opaque(self: *Self, buffer: *[CmdBuffer.SIZE]u32) void {
+        const color = @as(Gp0Cmd, @bitCast(buffer[0])).args.mono_polygon;
+        const vert1 = @as(Gp0Packet, @bitCast(buffer[1])).vertex;
+        const vert2 = @as(Gp0Packet, @bitCast(buffer[2])).vertex;
+        const vert3 = @as(Gp0Packet, @bitCast(buffer[3])).vertex;
+        const vert4 = @as(Gp0Packet, @bitCast(buffer[4])).vertex;
+
+        _ = self;
+        std.debug.print("TODO: Draw quad {} [{}, {}, {}, {}]\n", .{ color, vert1, vert2, vert3, vert4 });
+    }
+
     // GP0(e1)
-    fn draw_mode(self: *Self, args: ArgsDrawMode) void {
+    fn draw_mode(self: *Self, args: Gp0Cmd.Args.DrawMode) void {
         self.stat.texture_page_x_base = args.texture_page_x_base;
         self.stat.texture_page_y_base = args.texture_page_y_base;
         self.stat.semi_transparency = args.semi_transparency;
@@ -471,7 +610,7 @@ pub const Gpu = struct {
     }
 
     // GP0(E2): Texture Window setting
-    fn texture_window(self: *Self, args: ArgsTextureWindow) void {
+    fn texture_window(self: *Self, args: Gp0Cmd.Args.TextureWindow) void {
         self.texture_window_x_mask = args.texture_window_x_mask;
         self.texture_window_y_mask = args.texture_window_y_mask;
         self.texture_window_x_offset = args.texture_window_x_offset;
@@ -479,35 +618,38 @@ pub const Gpu = struct {
     }
 
     // GP0(E3): Set Drawing Area top left (X1,Y1)
-    fn drawing_area_top_left(self: *Self, args: ArgsDrawingArea) void {
+    fn drawing_area_top_left(self: *Self, args: Gp0Cmd.Args.DrawingArea) void {
         self.drawing_area_left = args.x_coord;
         self.drawing_area_top = args.y_coord;
     }
 
     // GP0(E4): Set Drawing Area bottom right (X2,Y2)
-    fn drawing_area_bottom_right(self: *Self, args: ArgsDrawingArea) void {
+    fn drawing_area_bottom_right(self: *Self, args: Gp0Cmd.Args.DrawingArea) void {
         self.drawing_area_right = args.x_coord;
         self.drawing_area_bottom = args.y_coord;
     }
 
     // GP0(E5): Set Drawing Offset (X,Y)
-    fn drawing_offset(self: *Self, args: ArgsDrawingOffset) void {
+    fn drawing_offset(self: *Self, args: Gp0Cmd.Args.DrawingOffset) void {
         self.drawing_x_offset = args.x_offset;
         self.drawing_y_offset = args.y_offset;
     }
 
     // GP0(E6): Mask Bit Setting
-    fn bit_mask_setting(self: *Self, args: ArgsBitMaskSetting) void {
+    fn bit_mask_setting(self: *Self, args: Gp0Cmd.Args.BitMaskSetting) void {
         self.stat.force_set_mask_bit = args.force_set_mask_bit;
         self.stat.preserve_masked_pixels = args.preserve_masked_pixels;
     }
 
     fn gp1(self: *Self, v: u32) void {
-        const cmd: Gp1Command = @bitCast(v);
+        const cmd: Gp1Cmd = @bitCast(v);
         switch (cmd.op) {
-            Gp1Op.reset => self.reset(),
-            Gp1Op.display_mode => self.display_mode(cmd.args.display_mode),
-            Gp1Op.dma_direction => self.dma_direction(cmd.args.dma_direction),
+            Gp1Cmd.Op.reset => self.reset(),
+            Gp1Cmd.Op.dma_direction => self.dma_direction(cmd.args.dma_direction),
+            Gp1Cmd.Op.display_vram_start => self.display_vram_start(cmd.args.display_vram_start),
+            Gp1Cmd.Op.display_horizontal_range => self.display_horizontal_range(cmd.args.display_horizontal_range),
+            Gp1Cmd.Op.display_vertical_range => self.display_vertical_range(cmd.args.display_vertical_range),
+            Gp1Cmd.Op.display_mode => self.display_mode(cmd.args.display_mode),
             _ => std.debug.panic("TODO: gpu gp1 op {x:0>2} args {x:0>6}", .{ cmd.op, cmd.args.raw }),
         }
     }
@@ -560,7 +702,7 @@ pub const Gpu = struct {
     }
 
     // GP1(08): Display mode
-    fn display_mode(self: *Self, args: ArgsDisplayMode) void {
+    fn display_mode(self: *Self, args: Gp1Cmd.Args.DisplayMode) void {
         self.stat.horizontal_res_1 = args.horizontal_res_1;
         self.stat.horizontal_res_2 = args.horizontal_res_2;
         self.stat.video_mode = args.video_mode;
@@ -574,7 +716,26 @@ pub const Gpu = struct {
     }
 
     // GP1(04): DMA Direction / Data Request
-    fn dma_direction(self: *Self, args: ArgsDirectionArgs) void {
+    fn dma_direction(self: *Self, args: Gp1Cmd.Args.DirectionArgs) void {
         self.stat.dma_direction = args.dma_direction;
+    }
+
+    // GP1(05h): Start of Display area (in VRAM)
+    fn display_vram_start(self: *Self, args: Gp1Cmd.Args.DisplayVramStart) void {
+        const mask_inv: u10 = 0b1;
+        self.display_vram_x_start = args.x & (~mask_inv);
+        self.display_vram_y_start = args.y;
+    }
+
+    // GP1(06): Horizontal Display range (on Screen)
+    fn display_horizontal_range(self: *Self, args: Gp1Cmd.Args.DisplayHorizontalRange) void {
+        self.display_horiz_start = args.x1;
+        self.display_horiz_end = args.x2;
+    }
+
+    // GP1(07): Vertical Display range (on Screen)
+    fn display_vertical_range(self: *Self, args: Gp1Cmd.Args.DisplayVerticalRange) void {
+        self.display_line_start = args.y1;
+        self.display_line_end = args.y2;
     }
 };
