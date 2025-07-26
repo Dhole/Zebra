@@ -185,7 +185,7 @@ const Stat = packed struct {
 };
 
 const Gp0Packet = packed union {
-    const Vertex = packed struct {
+    const Xy = packed struct {
         x: u16,
         y: u16,
         comptime {
@@ -193,7 +193,7 @@ const Gp0Packet = packed union {
         }
     };
 
-    vertex: Vertex,
+    xy: Xy,
     comptime {
         std.debug.assert(@bitSizeOf(@This()) == 32);
     }
@@ -203,8 +203,12 @@ const Gp0Cmd = packed struct {
     const Op = enum(u8) {
         // GP0(00h) - NOP (?)
         nop = 0x00,
+        // GP0(01h) - Clear Cache
+        clear_cache = 0x01,
         // GP0(28h) - Monochrome four-point polygon, opaque
         quad_mono_opaque = 0x28,
+        // GP0(A0h) - Copy Rectangle (CPU to VRAM)
+        image_load = 0xa0,
         // GP0(E1h) - Draw Mode setting (aka "Texpage")
         draw_mode = 0xe1,
         // GP0(E2h) - Texture Window setting
@@ -555,6 +559,7 @@ pub const Gpu = struct {
             const cmd: Gp0Cmd = @bitCast(v);
             switch (cmd.op) {
                 Gp0Cmd.Op.nop => {},
+                Gp0Cmd.Op.clear_cache => self.clear_cache(),
                 Gp0Cmd.Op.quad_mono_opaque => {
                     self.gp0_cmd_buffer.push_word(v);
                     self.gp0_cmd_rem = 4;
@@ -581,16 +586,22 @@ pub const Gpu = struct {
         }
     }
 
+    // GP0(01): Clear Cache
+    fn clear_cache(self: *Self) void {
+        _ = self;
+        // TODO
+    }
+
     // GP0(28): Monochrome four-point polygon, opaque
     fn quad_mono_opaque(self: *Self, buffer: *[CmdBuffer.SIZE]u32) void {
         const color = @as(Gp0Cmd, @bitCast(buffer[0])).args.mono_polygon;
-        const vert1 = @as(Gp0Packet, @bitCast(buffer[1])).vertex;
-        const vert2 = @as(Gp0Packet, @bitCast(buffer[2])).vertex;
-        const vert3 = @as(Gp0Packet, @bitCast(buffer[3])).vertex;
-        const vert4 = @as(Gp0Packet, @bitCast(buffer[4])).vertex;
+        const vertex1 = @as(Gp0Packet, @bitCast(buffer[1])).xy;
+        const vertex2 = @as(Gp0Packet, @bitCast(buffer[2])).xy;
+        const vertex3 = @as(Gp0Packet, @bitCast(buffer[3])).xy;
+        const vertex4 = @as(Gp0Packet, @bitCast(buffer[4])).xy;
 
         _ = self;
-        std.debug.print("TODO: Draw quad {} [{}, {}, {}, {}]\n", .{ color, vert1, vert2, vert3, vert4 });
+        std.debug.print("TODO: Draw quad {} [{}, {}, {}, {}]\n", .{ color, vertex1, vertex2, vertex3, vertex4 });
     }
 
     // GP0(e1)
