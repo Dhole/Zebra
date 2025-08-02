@@ -333,6 +333,8 @@ const Gp1Cmd = packed struct {
     const Op = enum(u8) {
         // GP1(00h) - Reset GPU
         reset = 0x00,
+        // GP1(03h) - Display Enable
+        display_enable = 0x03,
         // GP1(04h) - DMA Direction / Data Request
         dma_direction = 0x04,
         // GP1(05h) - Start of Display area (in VRAM)
@@ -413,6 +415,17 @@ const Gp1Cmd = packed struct {
             }
         };
 
+        const DisplayEnable = packed struct {
+            // 0     Display On/Off   (0=On, 1=Off)                         ;GPUSTAT.23
+            off: bool,
+            // 1-23  Not used (zero)
+            unused: u23,
+            comptime {
+                std.debug.assert(@bitSizeOf(@This()) == 24);
+            }
+        };
+
+        display_enable: DisplayEnable,
         display_mode: DisplayMode,
         dma_direction: DirectionArgs,
         display_vram_start: DisplayVramStart,
@@ -454,6 +467,10 @@ const CmdBuffer = struct {
     }
 };
 
+fn divCeil(numerator: usize, denominator: usize) usize {
+    return @divFloor(numerator - 1, denominator) + 1;
+}
+
 pub const Gpu = struct {
     pub const ADDR_START: u16 = 0x0810;
     pub const ADDR_END: u16 = 0x0817;
@@ -467,6 +484,12 @@ pub const Gpu = struct {
         gp0 = 0x0810, //  1F801810.Write 4 GP0 Send GP0 Commands/Packets (Rendering and VRAM Access)
         gp1 = 0x0814, //  1F801814.Write 4 GP1 Send GP1 Commands (Display Control)
         _,
+    };
+    const Gp0Mode = enum {
+        // Default mode: handling commands
+        command,
+        // Loading an image into VRAM
+        image_load,
     };
 
     stat: Stat,
@@ -508,8 +531,9 @@ pub const Gpu = struct {
     // Display output last line relative to VSYNC
     display_line_end: u16 = 0x100,
 
+    gp0_mode: Gp0Mode = Gp0Mode.command,
     gp0_cmd_buffer: CmdBuffer,
-    gp0_cmd_rem: u8,
+    gp0_words_rem: usize,
     gp0_cmd_fn: *const fn (*Self, buffer: *[CmdBuffer.SIZE]u32) void,
 
     const Self = @This();
@@ -518,7 +542,7 @@ pub const Gpu = struct {
         return Self{
             .stat = Stat.init(),
             .gp0_cmd_buffer = CmdBuffer.init(),
-            .gp0_cmd_rem = 0,
+            .gp0_words_rem = 0,
             .gp0_cmd_fn = Self.gp0_dummy,
         };
     }
@@ -555,15 +579,20 @@ pub const Gpu = struct {
     }
 
     pub fn gp0(self: *Self, v: u32) void {
-        if (self.gp0_cmd_rem == 0) {
+        if (self.gp0_words_rem == 0) {
             const cmd: Gp0Cmd = @bitCast(v);
             switch (cmd.op) {
                 Gp0Cmd.Op.nop => {},
                 Gp0Cmd.Op.clear_cache => self.clear_cache(),
                 Gp0Cmd.Op.quad_mono_opaque => {
                     self.gp0_cmd_buffer.push_word(v);
-                    self.gp0_cmd_rem = 4;
+                    self.gp0_words_rem = 4;
                     self.gp0_cmd_fn = Self.quad_mono_opaque;
+                },
+                Gp0Cmd.Op.image_load => {
+                    self.gp0_cmd_buffer.push_word(v);
+                    self.gp0_words_rem = 2;
+                    self.gp0_cmd_fn = Self.image_load_0;
                 },
                 Gp0Cmd.Op.draw_mode => self.draw_mode(cmd.args.draw_mode),
                 Gp0Cmd.Op.texture_window => self.texture_window(cmd.args.texture_window),
@@ -577,11 +606,23 @@ pub const Gpu = struct {
                 },
             }
         } else {
-            self.gp0_cmd_buffer.push_word(v);
-            self.gp0_cmd_rem -= 1;
-            if (self.gp0_cmd_rem == 0) {
-                self.gp0_cmd_fn(self, &self.gp0_cmd_buffer.buffer);
-                self.gp0_cmd_buffer.clear();
+            switch (self.gp0_mode) {
+                Gp0Mode.command => {
+                    self.gp0_cmd_buffer.push_word(v);
+                    self.gp0_words_rem -= 1;
+                    if (self.gp0_words_rem == 0) {
+                        self.gp0_cmd_fn(self, &self.gp0_cmd_buffer.buffer);
+                        self.gp0_cmd_buffer.clear();
+                    }
+                },
+                Gp0Mode.image_load => {
+                    // TODO
+                    self.gp0_words_rem -= 1;
+                    if (self.gp0_words_rem == 0) {
+                        // Load done, switch back to command mode
+                        self.gp0_mode = Gp0Mode.command;
+                    }
+                },
             }
         }
     }
@@ -602,6 +643,21 @@ pub const Gpu = struct {
 
         _ = self;
         std.debug.print("TODO: Draw quad {} [{}, {}, {}, {}]\n", .{ color, vertex1, vertex2, vertex3, vertex4 });
+    }
+
+    // GP0(A0): Copy Rectangle (CPU to VRAM)
+    fn image_load_0(self: *Self, buffer: *[CmdBuffer.SIZE]u32) void {
+        const dst_coord = @as(Gp0Packet, @bitCast(buffer[1])).xy;
+        // TODO: store this dst_coord
+        _ = dst_coord;
+        const size = @as(Gp0Packet, @bitCast(buffer[2])).xy;
+        // Each pixel is 16 bits
+        const num_pixels: usize = size.x * size.y;
+        // Transfer 32 bits at a time.  If the number of pixels is odd we'll
+        // have an extra 16 bit of padding
+        const num_words = divCeil(num_pixels, 2);
+        self.gp0_mode = Gp0Mode.image_load;
+        self.gp0_words_rem = num_words;
     }
 
     // GP0(e1)
@@ -656,6 +712,7 @@ pub const Gpu = struct {
         const cmd: Gp1Cmd = @bitCast(v);
         switch (cmd.op) {
             Gp1Cmd.Op.reset => self.reset(),
+            Gp1Cmd.Op.display_enable => self.display_enable(cmd.args.display_enable),
             Gp1Cmd.Op.dma_direction => self.dma_direction(cmd.args.dma_direction),
             Gp1Cmd.Op.display_vram_start => self.display_vram_start(cmd.args.display_vram_start),
             Gp1Cmd.Op.display_horizontal_range => self.display_horizontal_range(cmd.args.display_horizontal_range),
@@ -712,18 +769,9 @@ pub const Gpu = struct {
         // TODO should also invalidate GPU cache if we ever implement it
     }
 
-    // GP1(08): Display mode
-    fn display_mode(self: *Self, args: Gp1Cmd.Args.DisplayMode) void {
-        self.stat.horizontal_res_1 = args.horizontal_res_1;
-        self.stat.horizontal_res_2 = args.horizontal_res_2;
-        self.stat.video_mode = args.video_mode;
-        self.stat.display_depth = args.display_depth;
-        self.stat.vertical_interlace = args.vertical_interlace;
-        self.stat.horizontal_res_2 = args.horizontal_res_2;
-        if (args.reverse_flag == 1) {
-            std.debug.panic("unsupported: reverse_flag=1", .{});
-        }
-        self.stat.reverse_flag = args.reverse_flag;
+    // GP1(03): Display Enable
+    fn display_enable(self: *Self, args: Gp1Cmd.Args.DisplayEnable) void {
+        self.stat.display_disabled = args.off;
     }
 
     // GP1(04): DMA Direction / Data Request
@@ -748,5 +796,19 @@ pub const Gpu = struct {
     fn display_vertical_range(self: *Self, args: Gp1Cmd.Args.DisplayVerticalRange) void {
         self.display_line_start = args.y1;
         self.display_line_end = args.y2;
+    }
+
+    // GP1(08): Display mode
+    fn display_mode(self: *Self, args: Gp1Cmd.Args.DisplayMode) void {
+        self.stat.horizontal_res_1 = args.horizontal_res_1;
+        self.stat.horizontal_res_2 = args.horizontal_res_2;
+        self.stat.video_mode = args.video_mode;
+        self.stat.display_depth = args.display_depth;
+        self.stat.vertical_interlace = args.vertical_interlace;
+        self.stat.horizontal_res_2 = args.horizontal_res_2;
+        if (args.reverse_flag == 1) {
+            std.debug.panic("unsupported: reverse_flag=1", .{});
+        }
+        self.stat.reverse_flag = args.reverse_flag;
     }
 };

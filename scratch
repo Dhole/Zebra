@@ -50,3 +50,7 @@ Commands:
 ```
 zig build debug -- --bios bios/SCPH1001.BIN -c "c"
 ```
+---
+Zig Documentation:
+- Zig Language Reference: file:///usr/share/doc/zig-doc/langref.html
+- Zig std: `zig std`
