@@ -447,6 +447,16 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     "{}=0x{x:0>8}, hi=0x{x:0>8}",
                     .{ fmt_reg(a.rd), self.r(a.rd), self.hi },
                 ),
+                // rs, lo
+                .mtlo => |a| try self.dbg_w.print(
+                    "lo=0x{x:0>8}, {}=0x{x:0>8}",
+                    .{ self.lo, fmt_reg(a.rs), self.r(a.rs) },
+                ),
+                // rs, hi
+                .mthi => |a| try self.dbg_w.print(
+                    "hi=0x{x:0>8}, {}=0x{x:0>8}",
+                    .{ self.hi, fmt_reg(a.rs), self.r(a.rs) },
+                ),
                 //
                 //
                 .j, .mfc0, .mfc2 => {},
@@ -459,7 +469,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                         .{ fmt_reg(a.rt), self.r(a.rt), addr, v },
                     );
                 },
-                .lh => |a| {
+                .lh, .lhu => |a| {
                     const offset: u32 = @bitCast(@as(i32, a.imm));
                     const addr = self.r(a.rs) +% offset;
                     const v = try self.read(false, u16, addr);
@@ -485,7 +495,35 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                         .{ fmt_reg(a.rt), self.r(a.rt), addr },
                     );
                 },
-                else => std.debug.panic("TODO dbg_trace {?}", .{inst}),
+                .sys => |a| {
+                    _ = a;
+                },
+                .rfe => |a| {
+                    _ = a;
+                },
+                .lwl => |_| try self.dbg_w.print("TODO", .{}),
+                .lwr => |_| try self.dbg_w.print("TODO", .{}),
+                .swl => |_| try self.dbg_w.print("TODO", .{}),
+                .swr => |_| try self.dbg_w.print("TODO", .{}),
+                .xor => |_| try self.dbg_w.print("TODO", .{}),
+                .nor => |_| try self.dbg_w.print("TODO", .{}),
+                .sllv => |_| try self.dbg_w.print("TODO", .{}),
+                .srlv => |_| try self.dbg_w.print("TODO", .{}),
+                .srav => |_| try self.dbg_w.print("TODO", .{}),
+                .mult => |_| try self.dbg_w.print("TODO", .{}),
+                .multu => |_| try self.dbg_w.print("TODO", .{}),
+                .bltzal => |_| try self.dbg_w.print("TODO", .{}),
+                .brk => |_| try self.dbg_w.print("TODO", .{}),
+                .lwc0 => |_| try self.dbg_w.print("TODO", .{}),
+                .swc0 => |_| try self.dbg_w.print("TODO", .{}),
+                .lwc2 => |_| try self.dbg_w.print("TODO", .{}),
+                .swc2 => |_| try self.dbg_w.print("TODO", .{}),
+                .ctc2 => |_| try self.dbg_w.print("TODO", .{}),
+                .cfc2 => |_| try self.dbg_w.print("TODO", .{}),
+                .cop1 => |_| try self.dbg_w.print("TODO", .{}),
+                .cop3 => |_| try self.dbg_w.print("TODO", .{}),
+                .bgezal => |_| try self.dbg_w.print("TODO", .{}),
+                // else => std.debug.panic("TODO dbg_trace {?}", .{inst}),
             }
             try self.dbg_w.print("\n", .{});
         }
@@ -743,12 +781,11 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     // Get the register value that will be updated.  Read from
                     // the delay slot so that lwl and lwr work in a chain.
                     const cur_v = if (a.rt[0] == self.delay_dst_r[0]) self.delay_dst_v else self.r(a.rt);
-                    const v = switch (addr & 0b11) {
+                    const v = switch (@as(u2, @truncate(addr))) {
                         0 => (cur_v & 0x00ff_ffff) | (word << 24),
                         1 => (cur_v & 0x0000_ffff) | (word << 16),
                         2 => (cur_v & 0x0000_00ff) | (word << 8),
                         3 => (cur_v & 0x0000_0000) | (word << 0),
-                        else => unreachable,
                     };
                     delay_dst_r = a.rt;
                     delay_dst_v = v;
@@ -761,12 +798,11 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                     // Get the register value that will be updated.  Read from
                     // the delay slot so that lwl and lwr work in a chain.
                     const cur_v = if (a.rt[0] == self.delay_dst_r[0]) self.delay_dst_v else self.r(a.rt);
-                    const v = switch (addr & 0b11) {
+                    const v = switch (@as(u2, @truncate(addr))) {
                         0 => (cur_v & 0x0000_0000) | (word >> 0),
                         1 => (cur_v & 0xff00_0000) | (word >> 8),
                         2 => (cur_v & 0xffff_0000) | (word >> 16),
                         3 => (cur_v & 0xffff_ff00) | (word >> 24),
-                        else => unreachable,
                     };
                     delay_dst_r = a.rt;
                     delay_dst_v = v;

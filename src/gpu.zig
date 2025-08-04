@@ -579,6 +579,7 @@ pub const Gpu = struct {
     }
 
     pub fn gp0(self: *Self, v: u32) void {
+        std.debug.print("DBG gp0 {} {x:0>8}\n", .{ self.gp0_mode, v });
         if (self.gp0_words_rem == 0) {
             const cmd: Gp0Cmd = @bitCast(v);
             switch (cmd.op) {
@@ -601,8 +602,17 @@ pub const Gpu = struct {
                 Gp0Cmd.Op.drawing_offset => self.drawing_offset(cmd.args.drawing_offset),
                 Gp0Cmd.Op.bit_mask_setting => self.bit_mask_setting(cmd.args.bit_mask_setting),
                 _ => {
-                    std.debug.print("GPU: \n{}\n", .{self});
-                    std.debug.panic("TODO: gpu gp0 op {x:0>2} args {x:0>6}", .{ cmd.op, cmd.args.raw });
+                    const op: u8 = @intFromEnum(cmd.op);
+                    switch (op) {
+                        0x31, 0x45, 0x56 => {
+                            std.debug.panic("BAD gp0 {x:0>2}\n", .{op});
+                            return;
+                        },
+                        else => {},
+                    }
+                    std.debug.print("TODO gp0 {x:0>2}\n", .{op});
+                    // std.debug.print("GPU: \n{}\n", .{self});
+                    // std.debug.panic("TODO: gpu gp0 op {x:0>2} args {x:0>6}", .{ cmd.op, cmd.args.raw });
                 },
             }
         } else {
@@ -649,13 +659,14 @@ pub const Gpu = struct {
     fn image_load_0(self: *Self, buffer: *[CmdBuffer.SIZE]u32) void {
         const dst_coord = @as(Gp0Packet, @bitCast(buffer[1])).xy;
         // TODO: store this dst_coord
-        _ = dst_coord;
+        // _ = dst_coord;
         const size = @as(Gp0Packet, @bitCast(buffer[2])).xy;
         // Each pixel is 16 bits
-        const num_pixels: usize = size.x * size.y;
+        const num_pixels: usize = @as(usize, size.x) * @as(usize, size.y);
         // Transfer 32 bits at a time.  If the number of pixels is odd we'll
         // have an extra 16 bit of padding
         const num_words = divCeil(num_pixels, 2);
+        std.debug.print("DBG image_load_0 dst_coord={}, size={}, num_words={}\n", .{ dst_coord, size, num_words });
         self.gp0_mode = Gp0Mode.image_load;
         self.gp0_words_rem = num_words;
     }
@@ -709,6 +720,7 @@ pub const Gpu = struct {
     }
 
     fn gp1(self: *Self, v: u32) void {
+        std.debug.print("DBG gp1 {x:0>8}\n", .{v});
         const cmd: Gp1Cmd = @bitCast(v);
         switch (cmd.op) {
             Gp1Cmd.Op.reset => self.reset(),
