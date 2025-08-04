@@ -239,35 +239,58 @@ const Interrupt = struct {
     }
 };
 
-const Control = struct {
-    v: u32,
-
-    // 1f8010f0 - DPCR - DMA Control Register (R/W)
-    const CTL_DMA0_PRIORITY: u8 = 0; //       0-2   DMA0, MDECin  Priority      (0..7; 0=Highest, 7=Lowest)
-    const CTL_DMA0_MASTER_ENABLE: u8 = 3; //  3     DMA0, MDECin  Master Enable (0=Disable, 1=Enable)
-    const CTL_DMA1_PRIORITY: u8 = 4; //       4-6   DMA1, MDECout Priority      (0..7; 0=Highest, 7=Lowest)
-    const CTL_DMA1_MASTER_ENABLE: u8 = 7; //  7     DMA1, MDECout Master Enable (0=Disable, 1=Enable)
-    const CTL_DMA2_PRIORITY: u8 = 8; //       8-10  DMA2, GPU     Priority      (0..7; 0=Highest, 7=Lowest)
-    const CTL_DMA2_MASTER_ENABLE: u8 = 11; // 11    DMA2, GPU     Master Enable (0=Disable, 1=Enable)
-    const CTL_DMA3_PRIORITY: u8 = 12; //      12-14 DMA3, CDROM   Priority      (0..7; 0=Highest, 7=Lowest)
-    const CTL_DMA3_MASTER_ENABLE: u8 = 15; // 15    DMA3, CDROM   Master Enable (0=Disable, 1=Enable)
-    const CTL_DMA4_PRIORITY: u8 = 16; //      16-18 DMA4, SPU     Priority      (0..7; 0=Highest, 7=Lowest)
-    const CTL_DMA4_MASTER_ENABLE: u8 = 19; // 19    DMA4, SPU     Master Enable (0=Disable, 1=Enable)
-    const CTL_DMA5_PRIORITY: u8 = 20; //      20-22 DMA5, PIO     Priority      (0..7; 0=Highest, 7=Lowest)
-    const CTL_DMA5_MASTER_ENABLE: u8 = 23; // 23    DMA5, PIO     Master Enable (0=Disable, 1=Enable)
-    const CTL_DMA6_PRIORITY: u8 = 24; //      24-26 DMA6, OTC     Priority      (0..7; 0=Highest, 7=Lowest)
-    const CTL_DMA6_MASTER_ENABLE: u8 = 27; // 27    DMA6, OTC     Master Enable (0=Disable, 1=Enable)
+const Control = packed struct {
+    // 0-2   DMA0, MDECin  Priority      (0..7; 0=Highest, 7=Lowest)
+    dma0_mdecin_prio: u3,
+    // 3     DMA0, MDECin  Master Enable (0=Disable, 1=Enable)
+    dma0_mdecin_master_enable: bool,
+    // 4-6   DMA1, MDECout Priority      (0..7; 0=Highest, 7=Lowest)
+    dma1_mdecout_prio: u3,
+    // 7     DMA1, MDECout Master Enable (0=Disable, 1=Enable)
+    dma1_mdecout_master_enable: bool,
+    // 8-10  DMA2, GPU     Priority      (0..7; 0=Highest, 7=Lowest)
+    dma2_gpu_prio: u3,
+    // 11    DMA2, GPU     Master Enable (0=Disable, 1=Enable)
+    dma2_gpu_master_enable: bool,
+    // 12-14 DMA3, CDROM   Priority      (0..7; 0=Highest, 7=Lowest)
+    dma3_cdrom_prio: u3,
+    // 15    DMA3, CDROM   Master Enable (0=Disable, 1=Enable)
+    dma3_cdrom_master_enable: bool,
+    // 16-18 DMA4, SPU     Priority      (0..7; 0=Highest, 7=Lowest)
+    dma4_spu_prio: u3,
+    // 19    DMA4, SPU     Master Enable (0=Disable, 1=Enable)
+    dma4_spu_master_enable: bool,
+    // 20-22 DMA5, PIO     Priority      (0..7; 0=Highest, 7=Lowest)
+    dma5_pio_prio: u3,
+    // 23    DMA5, PIO     Master Enable (0=Disable, 1=Enable)
+    dma5_pio_master_enable: bool,
+    // 24-26 DMA6, OTC     Priority      (0..7; 0=Highest, 7=Lowest)
+    dma6_otc_prio: u3,
+    // 27    DMA6, OTC     Master Enable (0=Disable, 1=Enable)
+    dma6_otc_master_enable: bool,
     // 28-30 Unknown, Priority Offset or so? (R/W)
+    unknown_0: u3,
     // 31    Unknown, no effect? (R/W)
+    unknown_1: u1,
+
+    comptime {
+        std.debug.assert(@bitSizeOf(@This()) == 32);
+    }
 
     const Self = @This();
 
     fn init() Self {
-        return Self{ .v = 0x07654321 };
+        var v: Self = undefined;
+        v.set(0x07654321);
+        return v;
     }
 
     fn set(self: *Self, v: u32) void {
-        self.v = v;
+        self.* = @bitCast(v);
+    }
+
+    fn get(self: *Self) u32 {
+        return @bitCast(self.*);
     }
 };
 
@@ -339,7 +362,7 @@ pub const Dma = struct {
                     else => unreachable,
                 };
             },
-            REG_DPCR => self.control.v,
+            REG_DPCR => self.control.get(),
             REG_DICR => self.interrupt.v,
             else => unreachable,
         };

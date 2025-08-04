@@ -602,17 +602,17 @@ pub const Gpu = struct {
                 Gp0Cmd.Op.drawing_offset => self.drawing_offset(cmd.args.drawing_offset),
                 Gp0Cmd.Op.bit_mask_setting => self.bit_mask_setting(cmd.args.bit_mask_setting),
                 _ => {
-                    const op: u8 = @intFromEnum(cmd.op);
-                    switch (op) {
-                        0x31, 0x45, 0x56 => {
-                            std.debug.panic("BAD gp0 {x:0>2}\n", .{op});
-                            return;
-                        },
-                        else => {},
-                    }
-                    std.debug.print("TODO gp0 {x:0>2}\n", .{op});
-                    // std.debug.print("GPU: \n{}\n", .{self});
-                    // std.debug.panic("TODO: gpu gp0 op {x:0>2} args {x:0>6}", .{ cmd.op, cmd.args.raw });
+                    // const op: u8 = @intFromEnum(cmd.op);
+                    // switch (op) {
+                    //     0x31, 0x45, 0x56 => {
+                    //         std.debug.panic("BAD gp0 {x:0>2}\n", .{op});
+                    //         return;
+                    //     },
+                    //     else => {},
+                    // }
+                    // std.debug.print("TODO gp0 {x:0>2}\n", .{op});
+                    std.debug.print("GPU: \n{}\n", .{self});
+                    std.debug.panic("TODO: gpu gp0 op {x:0>2} args {x:0>6}", .{ cmd.op, cmd.args.raw });
                 },
             }
         } else {
