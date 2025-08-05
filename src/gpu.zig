@@ -184,6 +184,22 @@ const Stat = packed struct {
     }
 };
 
+const Gp0HalfPacket = packed union {
+    const Xy = packed struct {
+        x: u8,
+        y: u8,
+        comptime {
+            std.debug.assert(@bitSizeOf(@This()) == 16);
+        }
+    };
+
+    xy: Xy,
+    raw: u16,
+    comptime {
+        std.debug.assert(@bitSizeOf(@This()) == 16);
+    }
+};
+
 const Gp0Packet = packed union {
     const Xy = packed struct {
         x: u16,
@@ -192,8 +208,26 @@ const Gp0Packet = packed union {
             std.debug.assert(@bitSizeOf(@This()) == 32);
         }
     };
+    const Color = packed struct {
+        red: u8,
+        green: u8,
+        blue: u8,
+        unused: u8,
+        comptime {
+            std.debug.assert(@bitSizeOf(@This()) == 32);
+        }
+    };
+    const LoHi = packed struct {
+        lo: Gp0HalfPacket,
+        hi: Gp0HalfPacket,
+        comptime {
+            std.debug.assert(@bitSizeOf(@This()) == 32);
+        }
+    };
 
+    lo_hi: LoHi,
     xy: Xy,
+    color: Color,
     comptime {
         std.debug.assert(@bitSizeOf(@This()) == 32);
     }
@@ -207,8 +241,16 @@ const Gp0Cmd = packed struct {
         clear_cache = 0x01,
         // GP0(28h) - Monochrome four-point polygon, opaque
         quad_mono_opaque = 0x28,
+        // GP0(2Ch) - Textured four-point polygon, opaque, texture-blending
+        quad_texture_blend_opaque = 0x2c,
+        // GP0(30h) - Shaded three-point polygon, opaque
+        triangle_shaded_opaque = 0x30,
+        // GP0(38h) - Shaded four-point polygon, opaque
+        quad_shaded_opaque = 0x38,
         // GP0(A0h) - Copy Rectangle (CPU to VRAM)
         image_load = 0xa0,
+        // GP0(C0h) - Copy Rectangle (VRAM to CPU)
+        image_store = 0xc0,
         // GP0(E1h) - Draw Mode setting (aka "Texpage")
         draw_mode = 0xe1,
         // GP0(E2h) - Texture Window setting
@@ -225,7 +267,7 @@ const Gp0Cmd = packed struct {
     };
 
     const Args = packed union {
-        const MonoPolygon = packed struct {
+        const Color = packed struct {
             red: u8,
             green: u8,
             blue: u8,
@@ -313,7 +355,7 @@ const Gp0Cmd = packed struct {
             }
         };
 
-        mono_polygon: MonoPolygon,
+        color: Color,
         draw_mode: DrawMode,
         drawing_area: DrawingArea,
         drawing_offset: DrawingOffset,
@@ -590,10 +632,30 @@ pub const Gpu = struct {
                     self.gp0_words_rem = 4;
                     self.gp0_cmd_fn = Self.quad_mono_opaque;
                 },
+                Gp0Cmd.Op.quad_texture_blend_opaque => {
+                    self.gp0_cmd_buffer.push_word(v);
+                    self.gp0_words_rem = 8;
+                    self.gp0_cmd_fn = Self.quad_texture_blend_opaque;
+                },
+                Gp0Cmd.Op.triangle_shaded_opaque => {
+                    self.gp0_cmd_buffer.push_word(v);
+                    self.gp0_words_rem = 5;
+                    self.gp0_cmd_fn = Self.triangle_shaded_opaque;
+                },
+                Gp0Cmd.Op.quad_shaded_opaque => {
+                    self.gp0_cmd_buffer.push_word(v);
+                    self.gp0_words_rem = 7;
+                    self.gp0_cmd_fn = Self.quad_shaded_opaque;
+                },
                 Gp0Cmd.Op.image_load => {
                     self.gp0_cmd_buffer.push_word(v);
                     self.gp0_words_rem = 2;
                     self.gp0_cmd_fn = Self.image_load_0;
+                },
+                Gp0Cmd.Op.image_store => {
+                    self.gp0_cmd_buffer.push_word(v);
+                    self.gp0_words_rem = 2;
+                    self.gp0_cmd_fn = Self.image_store;
                 },
                 Gp0Cmd.Op.draw_mode => self.draw_mode(cmd.args.draw_mode),
                 Gp0Cmd.Op.texture_window => self.texture_window(cmd.args.texture_window),
@@ -645,7 +707,7 @@ pub const Gpu = struct {
 
     // GP0(28): Monochrome four-point polygon, opaque
     fn quad_mono_opaque(self: *Self, buffer: *[CmdBuffer.SIZE]u32) void {
-        const color = @as(Gp0Cmd, @bitCast(buffer[0])).args.mono_polygon;
+        const color = @as(Gp0Cmd, @bitCast(buffer[0])).args.color;
         const vertex1 = @as(Gp0Packet, @bitCast(buffer[1])).xy;
         const vertex2 = @as(Gp0Packet, @bitCast(buffer[2])).xy;
         const vertex3 = @as(Gp0Packet, @bitCast(buffer[3])).xy;
@@ -653,6 +715,56 @@ pub const Gpu = struct {
 
         _ = self;
         std.debug.print("TODO: Draw quad {} [{}, {}, {}, {}]\n", .{ color, vertex1, vertex2, vertex3, vertex4 });
+    }
+
+    // GP0(2C): Textured four-point polygon, opaque, texture-blending
+    fn quad_texture_blend_opaque(self: *Self, buffer: *[CmdBuffer.SIZE]u32) void {
+        const color1 = @as(Gp0Cmd, @bitCast(buffer[0])).args.color;
+        const vertex1 = @as(Gp0Packet, @bitCast(buffer[1])).xy;
+        const texcoord1, const palette = blk: {
+            const lo_hi = @as(Gp0Packet, @bitCast(buffer[2])).lo_hi;
+            break :blk .{ lo_hi.lo.xy, lo_hi.hi.raw };
+        };
+        const vertex2 = @as(Gp0Packet, @bitCast(buffer[3])).xy;
+        const texcoord2, const texpage = blk: {
+            const lo_hi = @as(Gp0Packet, @bitCast(buffer[4])).lo_hi;
+            break :blk .{ lo_hi.lo.xy, lo_hi.hi.raw };
+        };
+        const vertex3 = @as(Gp0Packet, @bitCast(buffer[5])).xy;
+        const texcoord3 = @as(Gp0Packet, @bitCast(buffer[6])).lo_hi.lo.xy;
+        const vertex4 = @as(Gp0Packet, @bitCast(buffer[7])).xy;
+        const texcoord4 = @as(Gp0Packet, @bitCast(buffer[8])).lo_hi.lo.xy;
+
+        _ = self;
+        std.debug.print("TODO: Draw shaded quad tex {} [{}, {}, {}, {}] [{}, {}, {}, {}], {}, {}\n", .{ color1, vertex1, vertex2, vertex3, vertex4, texcoord1, texcoord2, texcoord3, texcoord4, palette, texpage });
+    }
+
+    // GP0(30): Shaded three-point polygon, opaque
+    fn triangle_shaded_opaque(self: *Self, buffer: *[CmdBuffer.SIZE]u32) void {
+        const color1 = @as(Gp0Cmd, @bitCast(buffer[0])).args.color;
+        const vertex1 = @as(Gp0Packet, @bitCast(buffer[1])).xy;
+        const color2 = @as(Gp0Packet, @bitCast(buffer[2])).color;
+        const vertex2 = @as(Gp0Packet, @bitCast(buffer[3])).xy;
+        const color3 = @as(Gp0Packet, @bitCast(buffer[4])).color;
+        const vertex3 = @as(Gp0Packet, @bitCast(buffer[5])).xy;
+
+        _ = self;
+        std.debug.print("TODO: Draw shaded triangle [{}, {}, {}] [{}, {}, {}]\n", .{ color1, color2, color3, vertex1, vertex2, vertex3 });
+    }
+
+    // GP0(38): Shaded four-point polygon, opaque
+    fn quad_shaded_opaque(self: *Self, buffer: *[CmdBuffer.SIZE]u32) void {
+        const color1 = @as(Gp0Cmd, @bitCast(buffer[0])).args.color;
+        const vertex1 = @as(Gp0Packet, @bitCast(buffer[1])).xy;
+        const color2 = @as(Gp0Packet, @bitCast(buffer[2])).color;
+        const vertex2 = @as(Gp0Packet, @bitCast(buffer[3])).xy;
+        const color3 = @as(Gp0Packet, @bitCast(buffer[4])).color;
+        const vertex3 = @as(Gp0Packet, @bitCast(buffer[5])).xy;
+        const color4 = @as(Gp0Packet, @bitCast(buffer[6])).color;
+        const vertex4 = @as(Gp0Packet, @bitCast(buffer[7])).xy;
+
+        _ = self;
+        std.debug.print("TODO: Draw shaded quad [{}, {}, {}, {}] [{}, {}, {}, {}]\n", .{ color1, color2, color3, color4, vertex1, vertex2, vertex3, vertex4 });
     }
 
     // GP0(A0): Copy Rectangle (CPU to VRAM)
@@ -666,9 +778,23 @@ pub const Gpu = struct {
         // Transfer 32 bits at a time.  If the number of pixels is odd we'll
         // have an extra 16 bit of padding
         const num_words = divCeil(num_pixels, 2);
-        std.debug.print("DBG image_load_0 dst_coord={}, size={}, num_words={}\n", .{ dst_coord, size, num_words });
+        std.debug.print("TODO image_load_1 dst_coord={}, size={}, num_words={}\n", .{ dst_coord, size, num_words });
         self.gp0_mode = Gp0Mode.image_load;
         self.gp0_words_rem = num_words;
+    }
+
+    // GP0(C0h) - Copy Rectangle (VRAM to CPU)
+    fn image_store(self: *Self, buffer: *[CmdBuffer.SIZE]u32) void {
+        _ = self;
+        const src_coord = @as(Gp0Packet, @bitCast(buffer[1])).xy;
+        // TODO: store this src_coord
+        const size = @as(Gp0Packet, @bitCast(buffer[2])).xy;
+        // Each pixel is 16 bits
+        const num_pixels: usize = @as(usize, size.x) * @as(usize, size.y);
+        // Transfer 32 bits at a time.  If the number of pixels is odd we'll
+        // have an extra 16 bit of padding
+        const num_words = divCeil(num_pixels, 2);
+        std.debug.print("TODO image_store src_coord={}, size={}, num_words={}\n", .{ src_coord, size, num_words });
     }
 
     // GP0(e1)
