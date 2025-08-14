@@ -2,6 +2,8 @@ const std = @import("std");
 const log = std.log;
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
+const atomic = std.atomic;
+const AtomicOrder = std.builtin.AtomicOrder;
 
 const root = @import("root.zig");
 const Inst = root.Inst;
@@ -79,7 +81,7 @@ const Dbg = struct {
     trace_inst: bool = false,
     trace_io: bool = false,
     breaks: ArrayList(u32),
-    _break: bool = false,
+    _break: atomic.Value(bool) = atomic.Value(bool).init(false),
     _first_step: bool = true,
 
     fn init(allocator: Allocator) Dbg {
@@ -340,9 +342,9 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             defer self.dbg._first_step = true;
             while (true) {
                 self.step();
-                if (self.dbg._break) {
+                if (self.dbg._break.load(AtomicOrder.unordered)) {
                     self.dbg_w.print("Breakpoint at {x:0>8}\n", .{self.pc}) catch @panic("write");
-                    self.dbg._break = false;
+                    self.dbg._break.store(false, AtomicOrder.unordered);
                     return;
                 }
                 self.dbg._first_step = false;
@@ -364,7 +366,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 if (!self.dbg._first_step) {
                     for (self.dbg.breaks.items) |addr| {
                         if (addr == self.pc) {
-                            self.dbg._break = true;
+                            self.dbg._break.store(true, AtomicOrder.unordered);
                             return;
                         }
                     }

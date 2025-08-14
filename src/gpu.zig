@@ -375,6 +375,10 @@ const Gp1Cmd = packed struct {
     const Op = enum(u8) {
         // GP1(00h) - Reset GPU
         reset = 0x00,
+        // GP1(01h) - Reset Command Buffer
+        reset_command_buffer = 0x01,
+        // GP1(02h) - Acknowledge GPU Interrupt (IRQ1)
+        acknowledge_irq = 0x02,
         // GP1(03h) - Display Enable
         display_enable = 0x03,
         // GP1(04h) - DMA Direction / Data Request
@@ -850,6 +854,8 @@ pub const Gpu = struct {
         const cmd: Gp1Cmd = @bitCast(v);
         switch (cmd.op) {
             Gp1Cmd.Op.reset => self.reset(),
+            Gp1Cmd.Op.reset_command_buffer => self.reset_command_buffer(),
+            Gp1Cmd.Op.acknowledge_irq => self.acknowledge_irq(),
             Gp1Cmd.Op.display_enable => self.display_enable(cmd.args.display_enable),
             Gp1Cmd.Op.dma_direction => self.dma_direction(cmd.args.dma_direction),
             Gp1Cmd.Op.display_vram_start => self.display_vram_start(cmd.args.display_vram_start),
@@ -903,8 +909,21 @@ pub const Gpu = struct {
         self.display_line_end = 0x100;
         self.stat.display_depth = Stat.DisplayDepth.n_15bits;
 
-        // TODO should also clear the command FIFO when we implement it
+        self.reset_command_buffer();
         // TODO should also invalidate GPU cache if we ever implement it
+    }
+
+    // GP1(01): Reset Command Buffer
+    fn reset_command_buffer(self: *Self) void {
+        self.gp0_cmd_buffer.clear();
+        self.gp0_words_rem = 0;
+        self.gp0_mode = Gp0Mode.command;
+        // TODO: Should also clear the command FIFO when we implement it
+    }
+
+    // GP1(02): Acknowledge GPU Interrupt (IRQ1)
+    fn acknowledge_irq(self: *Self) void {
+        self.stat.interrupt = false;
     }
 
     // GP1(03): Display Enable

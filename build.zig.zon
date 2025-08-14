@@ -32,6 +32,10 @@
             .url = "git+https://github.com/joachimschmidt557/linenoize.git?ref=v0.1.1#185f1dbd8b46f37d58cce96509ce8d6c65ec6cd3",
             .hash = "linenoize-0.1.1-J7HK8IjZAAAEvol7whndbSwd4rG3atbT0e_F61LKXgZ4",
         },
+        .SDL2 = .{
+            .url = "git+https://github.com/ikskuh/SDL.zig.git#424ff5f9245ef352e4c508c77ddaeed2f46bd605",
+            .hash = "SDL2-0.0.0-yMCQigakBADGJHtb2ljt13P_cCnG8Y819HRnIibNVPFk",
+        },
     },
     .paths = .{
         "build.zig",

@@ -1,5 +1,8 @@
 const std = @import("std");
 const eql = std.mem.eql;
+const atomic = std.atomic;
+const AtomicOrder = std.builtin.AtomicOrder;
+const os = std.os;
 const argsParser = @import("args");
 
 const Linenoise = @import("linenoize").Linenoise;
@@ -13,6 +16,15 @@ const _cpu = @import("cpu.zig");
 const Cpu = _cpu.Cpu;
 const Cfg = _cpu.Cfg;
 const SIZE_BIOS = _cpu.SIZE_BIOS;
+
+const cfg = Cfg{ .dbg = true };
+var cpu: Cpu(std.fs.File.Writer, cfg) = undefined;
+
+fn sigintHandler(sig: c_int) callconv(.C) void {
+    _ = sig;
+    std.debug.print("SIGINT received\n", .{});
+    cpu.dbg._break.store(true, AtomicOrder.unordered);
+}
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -54,11 +66,19 @@ pub fn main() !void {
     const bios = try bios_file.reader().readAllAlloc(allocator, SIZE_BIOS);
     defer allocator.free(bios);
 
-    const w = std.io.getStdOut().writer();
-
-    const cfg = Cfg{ .dbg = true };
-    var cpu = try Cpu(@TypeOf(w), cfg).init(allocator, bios, w);
+    const stdout = std.io.getStdOut().writer();
+    cpu = try Cpu(@TypeOf(stdout), cfg).init(allocator, bios, stdout);
     defer cpu.deinit();
+
+    // Register SIGINT handler (Ctrl + C)
+    const act = os.linux.Sigaction{
+        .handler = .{ .handler = sigintHandler },
+        .mask = os.linux.empty_sigset,
+        .flags = 0,
+    };
+    if (os.linux.sigaction(os.linux.SIG.INT, &act, null) != 0) {
+        return error.SignalHandlerError;
+    }
 
     var init_cmd_it = std.mem.tokenizeSequence(u8, opts.cmd orelse "", ";");
 
@@ -70,7 +90,7 @@ pub fn main() !void {
         var buf_input: ?[]const u8 = undefined;
         var free_input = false;
         if (init_cmd_it.next()) |cmd_str| {
-            try w.print("$> {s}\n", .{cmd_str});
+            try stdout.print("$> {s}\n", .{cmd_str});
             buf_input = cmd_str;
         } else {
             buf_input = try ln.linenoise("> ");
@@ -86,8 +106,8 @@ pub fn main() !void {
 
         const cmd = parse_input(input) catch |err| {
             switch (err) {
-                error.InvalidArgument => try w.print("ERR: Invalid argument\n", .{}),
-                error.MissingArgument => try w.print("ERR: Missing argument\n", .{}),
+                error.InvalidArgument => try stdout.print("ERR: Invalid argument\n", .{}),
+                error.MissingArgument => try stdout.print("ERR: Missing argument\n", .{}),
             }
             continue;
         } orelse last_cmd;
@@ -108,18 +128,18 @@ pub fn main() !void {
                 cpu.dbg_run();
             },
             .disasm => |a| {
-                try disasm_block(w, &cpu, cpu.next_pc, a.n);
+                try disasm_block(stdout, cpu.next_pc, a.n);
             },
             .disasm_at => |a| {
-                try disasm_block(w, &cpu, a.addr, a.n);
+                try disasm_block(stdout, a.addr, a.n);
             },
             .dump => |a| {
-                try dump(w, &cpu, a.addr, a.n);
+                try dump(stdout, a.addr, a.n);
             },
             .@"break" => |a| {
                 for (cpu.dbg.breaks.items) |addr| {
                     if (addr == a.addr) {
-                        try w.print("ERR: Duplicate breakpoint\n", .{});
+                        try stdout.print("ERR: Duplicate breakpoint\n", .{});
                         continue :loop;
                     }
                 }
@@ -132,17 +152,17 @@ pub fn main() !void {
                         continue :loop;
                     }
                 }
-                try w.print("ERR: Breakpoint not found\n", .{});
+                try stdout.print("ERR: Breakpoint not found\n", .{});
             },
             .info_breaks => {
                 for (cpu.dbg.breaks.items, 0..) |addr, i| {
-                    try w.print("break {d} at {x:0>8}\n", .{ i, addr });
+                    try stdout.print("break {d} at {x:0>8}\n", .{ i, addr });
                 }
             },
-            .regs => try cpu.format_regs(w),
-            .help => try print_help(w),
+            .regs => try cpu.format_regs(stdout),
+            .help => try print_help(stdout),
             .unknown => {
-                try w.print("ERR: Unknown command\n", .{});
+                try stdout.print("ERR: Unknown command\n", .{});
             },
             .nop => {},
         }
@@ -255,20 +275,18 @@ fn print_help(w: anytype) !void {
     , .{});
 }
 
-// cpu: *Cpu
-fn disasm_block(writer: anytype, cpu: anytype, addr: u32, n: u32) !void {
+fn disasm_block(w: anytype, addr: u32, n: u32) !void {
     for (0..n) |i| {
         const i_u32: u32 = @intCast(i);
         const a: u32 = addr + i_u32 * 4;
         const inst_raw = try cpu.read(true, u32, a);
         const inst = decode(inst_raw);
-        try print_disasm(writer, a, inst_raw, inst);
+        try print_disasm(w, a, inst_raw, inst);
+        try w.print("\n", .{});
     }
 }
 
-// cpu: *Cpu
-// w: Writer
-fn dump(w: anytype, cpu: anytype, addr: u32, n: u32) !void {
+fn dump(w: anytype, addr: u32, n: u32) !void {
     var p = addr;
     while (true) {
         try w.print("{x:0>8}  ", .{p});

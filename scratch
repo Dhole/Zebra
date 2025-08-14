@@ -49,6 +49,10 @@ The `lw` executes the `bne` in the delay slot, which executes the `sw` in the de
 Trigger dma for image_load: 800507b8
 DBG dma_block size=530843040
 
+At 800507b8
+- zebra t7, t8: 0f6f4b21
+- mednafen t7, t8: 080b0800
+
 The size seems too big!
 
 ---
@@ -59,7 +63,7 @@ guide page: 133 (4.22)
 
 Commands:
 ```
-zig build debug -- --bios bios/SCPH1001.BIN -c "c"
+zig build install && ./zig-out/bin/debug --bios bios/SCPH1001.BIN -c "c"
 ```
 ---
 Zig Documentation:
