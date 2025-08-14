@@ -30,6 +30,9 @@ const Dma = _dma.Dma;
 const _gpu = @import("gpu.zig");
 const Gpu = _gpu.Gpu;
 
+const _renderer = @import("renderer.zig");
+const Renderer = _renderer.Renderer;
+
 pub const SIZE_BIOS: usize = 512 * 1024; // 512 KiB
 pub const SIZE_EXP_REG1: usize = 8 * 1024; // 8 KiB
 pub const SIZE_SCRATCH: usize = 1024; // 1 KiB
@@ -250,6 +253,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         cop0: Cop0,
         dma: Dma,
         gpu: *Gpu,
+        renderer: Renderer,
         pc: u32 = 0, // Current Program Counter
         next_pc: u32, // Next Program Counter
         next_next_pc: u32, // Next next Program Counter
@@ -275,7 +279,8 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
             }
             const ram = try Ram.init(allocator);
             const gpu = try allocator.create(Gpu);
-            gpu.* = Gpu.init();
+            const renderer = try Renderer.init();
+            gpu.* = Gpu.init(renderer);
             const bios_copy = try allocator.alloc(u8, SIZE_BIOS);
             std.mem.copyForwards(u8, bios_copy, bios);
             const pc = VADDR_RESET;
@@ -287,6 +292,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
                 .cop0 = Cop0.init(),
                 .dma = Dma.init(ram, gpu),
                 .gpu = gpu,
+                .renderer = renderer,
                 .next_pc = pc,
                 .next_next_pc = pc +% 4,
                 .lo = 0,
@@ -299,6 +305,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         }
 
         pub fn deinit(self: *Self) void {
+            self.renderer.deinit();
             self.ram.deinit();
             self.allocator.destroy(self.gpu);
             self.allocator.free(self.bios);

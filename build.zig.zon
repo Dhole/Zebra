@@ -36,6 +36,10 @@
             .url = "git+https://github.com/ikskuh/SDL.zig.git#424ff5f9245ef352e4c508c77ddaeed2f46bd605",
             .hash = "SDL2-0.0.0-yMCQigakBADGJHtb2ljt13P_cCnG8Y819HRnIibNVPFk",
         },
+        .zgl = .{
+            .url = "https://github.com/ziglibs/zgl/archive/5ed429cf5746e51ce72856386be6debf8ef4783c.tar.gz",
+            .hash = "zgl-1.1.0-p_NpAKE-CgBnmyP12H-ldbZLdImx1btyk8zPx0I5CGHX",
+        },
     },
     .paths = .{
         "build.zig",

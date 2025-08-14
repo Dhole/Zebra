@@ -1,4 +1,5 @@
 const std = @import("std");
+const Renderer = @import("renderer.zig").Renderer;
 
 // GPU Registers
 
@@ -582,14 +583,17 @@ pub const Gpu = struct {
     gp0_words_rem: usize,
     gp0_cmd_fn: *const fn (*Self, buffer: *[CmdBuffer.SIZE]u32) void,
 
+    renderer: Renderer,
+
     const Self = @This();
 
-    pub fn init() Self {
+    pub fn init(renderer: Renderer) Self {
         return Self{
             .stat = Stat.init(),
             .gp0_cmd_buffer = CmdBuffer.init(),
             .gp0_words_rem = 0,
             .gp0_cmd_fn = Self.gp0_dummy,
+            .renderer = renderer,
         };
     }
 

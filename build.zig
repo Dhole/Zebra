@@ -68,6 +68,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/bin_debug.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true, // Required for SDL2
     });
     exe_debug.root_module.addImport("args", b.dependency("args", .{ .target = target, .optimize = optimize }).module("args"));
 
@@ -82,6 +83,12 @@ pub fn build(b: *std.Build) void {
     // sdl_sdk.link(exe_debug, .dynamic, sdl.Library.SDL2); // link SDL2 as a shared library
     exe_debug.linkSystemLibrary("SDL2");
     exe_debug.root_module.addImport("SDL2", sdl_sdk.getWrapperModule());
+
+    const zgl = b.dependency("zgl", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    exe_debug.root_module.addImport("zgl", zgl.module("zgl"));
 
     b.installArtifact(exe_debug);
 
