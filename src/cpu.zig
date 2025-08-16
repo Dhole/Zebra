@@ -25,13 +25,8 @@ const Ram = _ram.Ram;
 const SIZE_RAM = _ram.SIZE_RAM;
 
 const _dma = @import("dma.zig");
-const Dma = _dma.Dma;
 
 const _gpu = @import("gpu.zig");
-const Gpu = _gpu.Gpu;
-
-const _renderer = @import("renderer.zig");
-const Renderer = _renderer.Renderer;
 
 pub const SIZE_BIOS: usize = 512 * 1024; // 512 KiB
 pub const SIZE_EXP_REG1: usize = 8 * 1024; // 8 KiB
@@ -244,9 +239,12 @@ const Cop0 = struct {
     }
 };
 
-pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
+pub fn Cpu(comptime DbgWriter: type, comptime Renderer: type, comptime cfg: Cfg) type {
     return struct {
-        dbg_w: dbg_writer_type,
+        const Gpu = _gpu.Gpu(Renderer);
+        const Dma = _dma.Dma(Renderer);
+
+        dbg_w: DbgWriter,
         comptime cfg: Cfg = cfg,
         dbg: Dbg,
         regs: [32]u32, // Registers
@@ -272,7 +270,7 @@ pub fn Cpu(comptime dbg_writer_type: type, comptime cfg: Cfg) type {
         pub fn init(
             allocator: Allocator,
             bios: []const u8,
-            dbg_writer: dbg_writer_type,
+            dbg_writer: DbgWriter,
         ) !Self {
             if (bios.len != SIZE_BIOS) {
                 return error.BiosInvalidSize;

@@ -16,9 +16,11 @@ const _cpu = @import("cpu.zig");
 const Cpu = _cpu.Cpu;
 const Cfg = _cpu.Cfg;
 const SIZE_BIOS = _cpu.SIZE_BIOS;
+const _renderer = @import("renderer.zig");
+const Renderer = _renderer.Renderer;
 
 const cfg = Cfg{ .dbg = true };
-var cpu: Cpu(std.fs.File.Writer, cfg) = undefined;
+var cpu: Cpu(std.fs.File.Writer, Renderer(cfg.dbg), cfg) = undefined;
 
 fn sigintHandler(sig: c_int) callconv(.C) void {
     _ = sig;
@@ -67,7 +69,7 @@ pub fn main() !void {
     defer allocator.free(bios);
 
     const stdout = std.io.getStdOut().writer();
-    cpu = try Cpu(@TypeOf(stdout), cfg).init(allocator, bios, stdout);
+    cpu = try .init(allocator, bios, stdout);
     defer cpu.deinit();
 
     // Register SIGINT handler (Ctrl + C)

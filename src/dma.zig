@@ -4,7 +4,6 @@ const _ram = @import("ram.zig");
 const Ram = _ram.Ram;
 
 const _gpu = @import("gpu.zig");
-const Gpu = _gpu.Gpu;
 
 const ADDR_IO_PORTS: u32 = 0x1f80_1000;
 
@@ -294,194 +293,198 @@ const Control = packed struct {
     }
 };
 
-pub const Dma = struct {
-    pub const ADDR_START: u16 = 0x0080;
-    pub const ADDR_END: u16 = 0x00ff;
+pub fn Dma(comptime Renderer: type) type {
+    const Gpu = _gpu.Gpu(Renderer);
 
-    const Port = enum(u8) {
-        mdec_in = 0,
-        mdec_out = 1,
-        gpu = 2,
-        cdrom = 3,
-        spu = 4,
-        pio = 5,
-        otc = 6,
-        _,
-    };
+    return struct {
+        pub const ADDR_START: u16 = 0x0080;
+        pub const ADDR_END: u16 = 0x00ff;
 
-    const REG_DMA_START: u16 = 0x0080;
-    // 1f80108x DMA0 channel 0 - MDECin (RAM to MDEC)
-    // 1f80109x DMA1 channel 1 - MDECout (MDEC to RAM)
-    // 1f8010ax DMA2 channel 2 - GPU (lists + image data)
-    // 1f8010bx DMA3 channel 3 - CDROM
-    // 1f8010cx DMA4 channel 4 - SPU
-    // 1f8010dx DMA5 channel 5 - PIO (Expansion Port)
-    // 1f8010ex DMA6 channel 6 - OTC (reverse clear OT) (GPU related)
-    const REG_DMA_END: u16 = 0x00ef;
-    const REG_DPCR: u16 = 0x00f0; // 1f8010f0 DPCR - DMA Control register
-    const REG_DICR: u16 = 0x00f4; // 1f8010f4 DICR - DMA Interrupt register
-    // 1f8010f8 unknown
-    // 1f8010fc unknown
-
-    channels: [7]Chan, // 1f801080 - 1f8010ec - DMA Channels registers
-    control: Control, // 1f8010f0 DPCR - DMA Control register
-    interrupt: Interrupt, // 1f8010f4 DICR - DMA Interrupt register
-
-    // Port devices
-    ram: Ram,
-    gpu: *Gpu,
-
-    const Self = @This();
-
-    pub fn init(ram: Ram, gpu: *Gpu) Self {
-        return Self{
-            .channels = .{Chan.init()} ** 7,
-            .control = Control.init(),
-            .interrupt = Interrupt.init(),
-            .ram = ram,
-            .gpu = gpu,
+        const Port = enum(u8) {
+            mdec_in = 0,
+            mdec_out = 1,
+            gpu = 2,
+            cdrom = 3,
+            spu = 4,
+            pio = 5,
+            otc = 6,
+            _,
         };
-    }
 
-    fn irq(self: *Self) bool {
-        const channel_irq = self.interrupt.irq_flags() & self.interrupt.irq_en_flags();
-        return self.interrupt.force_irq() or
-            (self.interrupt.irq_en_sig() and (channel_irq != 0));
-    }
+        const REG_DMA_START: u16 = 0x0080;
+        // 1f80108x DMA0 channel 0 - MDECin (RAM to MDEC)
+        // 1f80109x DMA1 channel 1 - MDECout (MDEC to RAM)
+        // 1f8010ax DMA2 channel 2 - GPU (lists + image data)
+        // 1f8010bx DMA3 channel 3 - CDROM
+        // 1f8010cx DMA4 channel 4 - SPU
+        // 1f8010dx DMA5 channel 5 - PIO (Expansion Port)
+        // 1f8010ex DMA6 channel 6 - OTC (reverse clear OT) (GPU related)
+        const REG_DMA_END: u16 = 0x00ef;
+        const REG_DPCR: u16 = 0x00f0; // 1f8010f0 DPCR - DMA Control register
+        const REG_DICR: u16 = 0x00f4; // 1f8010f4 DICR - DMA Interrupt register
+        // 1f8010f8 unknown
+        // 1f8010fc unknown
 
-    pub fn read_u32(self: *Self, addr: u16) u32 {
-        return switch (addr) {
-            REG_DMA_START...REG_DMA_END => blk: {
-                const offset = addr - REG_DMA_START;
-                const port = offset >> 4;
-                const reg = offset & 0x000f;
-                break :blk switch (reg) {
-                    0x0 => self.channels[port].base_addr.get(),
-                    0x4 => self.channels[port].blk_ctl.get(),
-                    0x8 => self.channels[port].chan_ctl.get(),
-                    else => unreachable,
-                };
-            },
-            REG_DPCR => self.control.get(),
-            REG_DICR => self.interrupt.v,
-            else => unreachable,
-        };
-    }
-    pub fn write_u32(self: *Self, addr: u16, v: u32) void {
-        switch (addr) {
-            REG_DMA_START...REG_DMA_END => {
-                const offset = addr - REG_DMA_START;
-                const port = offset >> 4;
-                const reg = offset & 0x000f;
-                var channel = &self.channels[port];
-                switch (reg) {
-                    0x0 => channel.base_addr.set(v),
-                    0x4 => channel.blk_ctl.set(v),
-                    0x8 => channel.chan_ctl.set(v),
-                    else => unreachable,
-                }
-                if (channel.chan_ctl.active()) {
-                    self.dma_transfer(@enumFromInt(port), channel);
-                }
-            },
-            REG_DPCR => self.control.set(v),
-            REG_DICR => self.interrupt.set(v),
-            else => unreachable,
+        channels: [7]Chan, // 1f801080 - 1f8010ec - DMA Channels registers
+        control: Control, // 1f8010f0 DPCR - DMA Control register
+        interrupt: Interrupt, // 1f8010f4 DICR - DMA Interrupt register
+
+        // Port devices
+        ram: Ram,
+        gpu: *Gpu,
+
+        const Self = @This();
+
+        pub fn init(ram: Ram, gpu: *Gpu) Self {
+            return Self{
+                .channels = .{Chan.init()} ** 7,
+                .control = Control.init(),
+                .interrupt = Interrupt.init(),
+                .ram = ram,
+                .gpu = gpu,
+            };
         }
-    }
 
-    // Execute a DMA transfer for a port
-    fn dma_transfer(self: *Self, port: Port, channel: *Chan) void {
-        // DMA transfer has been started, for now let's process everything in
-        // one pass (i.e. no chopping or priority handling)
-        switch (channel.chan_ctl.sync_mode) {
-            ChanCtl.SyncMode.linked_list => self.dma_linked_list(port, channel),
-            else => self.dma_block(port, channel),
+        fn irq(self: *Self) bool {
+            const channel_irq = self.interrupt.irq_flags() & self.interrupt.irq_en_flags();
+            return self.interrupt.force_irq() or
+                (self.interrupt.irq_en_sig() and (channel_irq != 0));
         }
-    }
 
-    fn dma_block(self: *Self, port: Port, channel: *Chan) void {
-        const increment: i32 = switch (channel.chan_ctl.memory_address_step) {
-            ChanCtl.AddressStep.forward => 4,
-            ChanCtl.AddressStep.backward => -4,
-        };
-        var addr = channel.base_addr.get();
-
-        // Transfer size in words
-        // NOTE: We never call this in Linked-List mode, which would return null in transfer_size()
-        var remsz = channel.transfer_size() orelse unreachable;
-        std.debug.print("DBG dma_block size={}\n", .{remsz});
-
-        while (remsz > 0) {
-            // Mednafen mask the address this way
-            const cur_addr = addr & 0x1f_fffc;
-
-            switch (channel.chan_ctl.transfer_direction) {
-                ChanCtl.TransferDirection.to_main_ram => {
-                    const src_word = switch (port) {
-                        // Clear ordering table
-                        Port.otc => switch (remsz) {
-                            // Last entry (increment = -4) contains the end of table marker
-                            1 => 0xff_ffff,
-                            // Pointer to the previous entry
-                            else => (addr -% 4) & 0x1f_fffc,
-                        },
-                        else => std.debug.panic("TODO: DMA source-port {}", .{port}),
+        pub fn read_u32(self: *Self, addr: u16) u32 {
+            return switch (addr) {
+                REG_DMA_START...REG_DMA_END => blk: {
+                    const offset = addr - REG_DMA_START;
+                    const port = offset >> 4;
+                    const reg = offset & 0x000f;
+                    break :blk switch (reg) {
+                        0x0 => self.channels[port].base_addr.get(),
+                        0x4 => self.channels[port].blk_ctl.get(),
+                        0x8 => self.channels[port].chan_ctl.get(),
+                        else => unreachable,
                     };
-                    self.ram.write(u32, cur_addr, src_word);
                 },
-                ChanCtl.TransferDirection.from_main_ram => {
-                    const src_word = self.ram.read(u32, cur_addr);
-                    switch (port) {
-                        Port.gpu => self.gpu.gp0(src_word),
-                        else => std.debug.panic("TODO: DMA destination-port {}", .{port}),
+                REG_DPCR => self.control.get(),
+                REG_DICR => self.interrupt.v,
+                else => unreachable,
+            };
+        }
+        pub fn write_u32(self: *Self, addr: u16, v: u32) void {
+            switch (addr) {
+                REG_DMA_START...REG_DMA_END => {
+                    const offset = addr - REG_DMA_START;
+                    const port = offset >> 4;
+                    const reg = offset & 0x000f;
+                    var channel = &self.channels[port];
+                    switch (reg) {
+                        0x0 => channel.base_addr.set(v),
+                        0x4 => channel.blk_ctl.set(v),
+                        0x8 => channel.chan_ctl.set(v),
+                        else => unreachable,
+                    }
+                    if (channel.chan_ctl.active()) {
+                        self.dma_transfer(@enumFromInt(port), channel);
                     }
                 },
+                REG_DPCR => self.control.set(v),
+                REG_DICR => self.interrupt.set(v),
+                else => unreachable,
             }
-
-            addr +%= @bitCast(increment);
-            remsz -= 1;
         }
 
-        channel.chan_ctl.set_done();
-    }
-
-    fn dma_linked_list(self: *Self, port: Port, channel: *Chan) void {
-        var addr = channel.base_addr.get() & 0x1f_fffc;
-
-        if (channel.chan_ctl.transfer_direction == ChanCtl.TransferDirection.to_main_ram) {
-            std.debug.panic("Invalid DMA direction for linked-list mode", .{});
+        // Execute a DMA transfer for a port
+        fn dma_transfer(self: *Self, port: Port, channel: *Chan) void {
+            // DMA transfer has been started, for now let's process everything in
+            // one pass (i.e. no chopping or priority handling)
+            switch (channel.chan_ctl.sync_mode) {
+                ChanCtl.SyncMode.linked_list => self.dma_linked_list(port, channel),
+                else => self.dma_block(port, channel),
+            }
         }
 
-        // I don't know if the DMA even supports linked-list mode for anything besides the GPU
-        if (port != Port.gpu) {
-            std.debug.panic("Attempted linked-list DMA on port {}", .{port});
-        }
+        fn dma_block(self: *Self, port: Port, channel: *Chan) void {
+            const increment: i32 = switch (channel.chan_ctl.memory_address_step) {
+                ChanCtl.AddressStep.forward => 4,
+                ChanCtl.AddressStep.backward => -4,
+            };
+            var addr = channel.base_addr.get();
 
-        while (true) {
-            // In linked-list mode each entry starts with a "header" word.  The
-            // high byte contains the number of words in the "packet" (not
-            // counting the header word).
-            const header = self.ram.read(u32, addr);
-            var remsz = header >> 24;
+            // Transfer size in words
+            // NOTE: We never call this in Linked-List mode, which would return null in transfer_size()
+            var remsz = channel.transfer_size() orelse unreachable;
+            std.debug.print("DBG dma_block size={}\n", .{remsz});
 
             while (remsz > 0) {
-                addr = (addr +% 4) & 0x1f_fffc;
-                const command = self.ram.read(u32, addr);
-                self.gpu.gp0(command);
+                // Mednafen mask the address this way
+                const cur_addr = addr & 0x1f_fffc;
+
+                switch (channel.chan_ctl.transfer_direction) {
+                    ChanCtl.TransferDirection.to_main_ram => {
+                        const src_word = switch (port) {
+                            // Clear ordering table
+                            Port.otc => switch (remsz) {
+                                // Last entry (increment = -4) contains the end of table marker
+                                1 => 0xff_ffff,
+                                // Pointer to the previous entry
+                                else => (addr -% 4) & 0x1f_fffc,
+                            },
+                            else => std.debug.panic("TODO: DMA source-port {}", .{port}),
+                        };
+                        self.ram.write(u32, cur_addr, src_word);
+                    },
+                    ChanCtl.TransferDirection.from_main_ram => {
+                        const src_word = self.ram.read(u32, cur_addr);
+                        switch (port) {
+                            Port.gpu => self.gpu.gp0(src_word),
+                            else => std.debug.panic("TODO: DMA destination-port {}", .{port}),
+                        }
+                    },
+                }
+
+                addr +%= @bitCast(increment);
                 remsz -= 1;
             }
 
-            // The end of list marker is usually 0xffffff but mednafen only
-            // checks for the MSB so maybe that's what the hardware does?
-            // Since this bit is not part of any valid address it makes some
-            // sense.  TODO: Test that at some point
-            if (header & 0x80_0000 != 0) {
-                break;
-            }
-            addr = header & 0x1f_fffc;
+            channel.chan_ctl.set_done();
         }
 
-        channel.chan_ctl.set_done();
-    }
-};
+        fn dma_linked_list(self: *Self, port: Port, channel: *Chan) void {
+            var addr = channel.base_addr.get() & 0x1f_fffc;
+
+            if (channel.chan_ctl.transfer_direction == ChanCtl.TransferDirection.to_main_ram) {
+                std.debug.panic("Invalid DMA direction for linked-list mode", .{});
+            }
+
+            // I don't know if the DMA even supports linked-list mode for anything besides the GPU
+            if (port != Port.gpu) {
+                std.debug.panic("Attempted linked-list DMA on port {}", .{port});
+            }
+
+            while (true) {
+                // In linked-list mode each entry starts with a "header" word.  The
+                // high byte contains the number of words in the "packet" (not
+                // counting the header word).
+                const header = self.ram.read(u32, addr);
+                var remsz = header >> 24;
+
+                while (remsz > 0) {
+                    addr = (addr +% 4) & 0x1f_fffc;
+                    const command = self.ram.read(u32, addr);
+                    self.gpu.gp0(command);
+                    remsz -= 1;
+                }
+
+                // The end of list marker is usually 0xffffff but mednafen only
+                // checks for the MSB so maybe that's what the hardware does?
+                // Since this bit is not part of any valid address it makes some
+                // sense.  TODO: Test that at some point
+                if (header & 0x80_0000 != 0) {
+                    break;
+                }
+                addr = header & 0x1f_fffc;
+            }
+
+            channel.chan_ctl.set_done();
+        }
+    };
+}
